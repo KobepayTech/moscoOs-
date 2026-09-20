@@ -1,0 +1,27 @@
+{
+  "name": "mamogoro-circles",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mamogoro Circles — a circles (chama/stokvel) operating system: share capital, member contributions, sponsor-underwritten lending, external investor facilities and share-weighted governance.",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "packages/*",
+    "apps/api",
+    "apps/admin",
+    "apps/mobile"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "build": "npm run build --workspace @mamogoro/core && npm run build --workspace @mamogoro/api",
+    "test": "npm run test --workspace @mamogoro/core && npm run test --workspace @mamogoro/api",
+    "seed": "npm run seed --workspace @mamogoro/api",
+    "dev:api": "npm run dev --workspace @mamogoro/api",
+    "dev:admin": "npm run dev --workspace @mamogoro/admin",
+    "dev:mobile": "npm run start --workspace @mamogoro/mobile"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3"
+  }
+}

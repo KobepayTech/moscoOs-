@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "Mamogoro Circles",
+    "slug": "mamogoro-circles",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "scheme": "mamogoro",
+    "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#f7f4ef",
+      "resizeMode": "contain"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.mamogoro.circles"
+    },
+    "android": {
+      "package": "com.mamogoro.circles",
+      "adaptiveIcon": {
+        "backgroundColor": "#b45f1f"
+      }
+    },
+    "extra": {
+      "apiUrl": "http://localhost:4000"
+    }
+  }
+}

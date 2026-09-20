@@ -1,0 +1,23 @@
+{
+  "name": "@mamogoro/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mamogoro Circles API — members, shares, contributions, sponsor-underwritten lending, investor facilities, the public ledger and governance votes.",
+  "type": "module",
+  "main": "./dist/src/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node --disable-warning=ExperimentalWarning dist/src/server.js",
+    "dev": "npm run build && npm run start",
+    "seed": "npm run build && node --disable-warning=ExperimentalWarning dist/src/seed.js",
+    "test": "npm run build && node --disable-warning=ExperimentalWarning --test \"dist/test/*.test.js\"",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@mamogoro/core": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "~5.9.3"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "@mamogoro/admin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mamogoro Circles admin panel — open to every member, not just the committee.",
+  "type": "module",
+  "scripts": {
+    "dev": "echo 'The admin panel is served by the API. Run: npm run dev:api, then open http://localhost:4000/'",
+    "build": "echo 'No build step: the panel ships as plain ES modules.'"
+  }
+}

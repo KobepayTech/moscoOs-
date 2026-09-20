@@ -1,0 +1,28 @@
+{
+  "name": "@mamogoro/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pure, dependency-free domain engine for Mamogoro Circles: money, shares, interest, amortisation, facility waterfall, sponsorship and governance.",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch",
+    "test": "npm run build && node --test \"dist/test/*.test.js\"",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "~5.9.3"
+  }
+}
