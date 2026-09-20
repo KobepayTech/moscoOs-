@@ -135,7 +135,18 @@ export function MyLoansScreen() {
 
         return (
           <Card key={loan.id}>
-            <Pressable onPress={() => setExpanded(open ? null : loan.id)}>
+            {/*
+              The whole summary is the tap target, not just the heading. A
+              caption that says "tap to see the schedule" has to respond
+              wherever the member actually taps.
+            */}
+            <Pressable
+              onPress={() => setExpanded(open ? null : loan.id)}
+              disabled={!loan.schedule}
+              accessibilityRole="button"
+              accessibilityState={{ expanded: open }}
+              accessibilityLabel={`${money(loan.principal, currency)} loan, ${loan.status.replace(/_/g, ' ')}`}
+            >
               <View
                 style={{
                   flexDirection: 'row',
@@ -150,39 +161,45 @@ export function MyLoansScreen() {
                 </View>
                 <Pill tone={STATUS_TONE[loan.status] ?? 'neutral'}>{loan.status.replace(/_/g, ' ')}</Pill>
               </View>
+
+              {loan.coverage ? (
+                <View style={{ marginTop: spacing.sm }}>
+                  <Meter ratio={loan.coverage.coverageRatio} complete={loan.coverage.fullyCovered} />
+                  <Caption>
+                    {money(loan.coverage.securedCover, currency)} of {money(loan.coverage.required, currency)}{' '}
+                    covered
+                    {loan.coverage.pendingSponsorCount > 0
+                      ? ` · ${loan.coverage.pendingSponsorCount} sponsor(s) yet to answer`
+                      : ''}
+                  </Caption>
+                </View>
+              ) : null}
+
+              {outstanding !== null ? (
+                <View style={{ marginTop: spacing.sm }}>
+                  <Row label="Still owing" value={money(outstanding, currency)} strong />
+                  {nextDue ? (
+                    <Row
+                      label={nextDue.row.kind === 'balloon' ? 'Final payment' : 'Next payment'}
+                      value={`${money(nextDue.row.totalDue, currency)} on ${longDate(nextDue.row.dueOn)}`}
+                    />
+                  ) : null}
+                  {inTrouble ? (
+                    <Row
+                      label="Overdue"
+                      value={money((loan.state?.arrears ?? 0) + (loan.state?.penaltyAccrued ?? 0), currency)}
+                      tone="danger"
+                    />
+                  ) : null}
+                </View>
+              ) : null}
+
+              {!open && loan.schedule ? (
+                <View style={{ marginTop: spacing.sm }}>
+                  <Caption>Tap to see the full schedule</Caption>
+                </View>
+              ) : null}
             </Pressable>
-
-            {loan.coverage ? (
-              <View style={{ marginTop: spacing.sm }}>
-                <Meter ratio={loan.coverage.coverageRatio} complete={loan.coverage.fullyCovered} />
-                <Caption>
-                  {money(loan.coverage.securedCover, currency)} of {money(loan.coverage.required, currency)}{' '}
-                  covered
-                  {loan.coverage.pendingSponsorCount > 0
-                    ? ` · ${loan.coverage.pendingSponsorCount} sponsor(s) yet to answer`
-                    : ''}
-                </Caption>
-              </View>
-            ) : null}
-
-            {outstanding !== null ? (
-              <View style={{ marginTop: spacing.sm }}>
-                <Row label="Still owing" value={money(outstanding, currency)} strong />
-                {nextDue ? (
-                  <Row
-                    label={nextDue.row.kind === 'balloon' ? 'Final payment' : 'Next payment'}
-                    value={`${money(nextDue.row.totalDue, currency)} on ${longDate(nextDue.row.dueOn)}`}
-                  />
-                ) : null}
-                {inTrouble ? (
-                  <Row
-                    label="Overdue"
-                    value={money((loan.state?.arrears ?? 0) + (loan.state?.penaltyAccrued ?? 0), currency)}
-                    tone="danger"
-                  />
-                ) : null}
-              </View>
-            ) : null}
 
             {open && loan.schedule ? (
               <View style={{ marginTop: spacing.md, gap: spacing.sm }}>
@@ -216,10 +233,6 @@ export function MyLoansScreen() {
                   flat principal with no interest on it.
                 </Explain>
               </View>
-            ) : null}
-
-            {!open && loan.schedule ? (
-              <Caption>Tap to see the full schedule</Caption>
             ) : null}
           </Card>
         );
