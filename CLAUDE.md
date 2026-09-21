@@ -1,0 +1,85 @@
+# Working in this repository
+
+Mamogoro Circles is a savings-and-lending circle (chama / stokvel) run as
+software. Read `docs/FINANCIAL-MODEL.md` before changing anything that touches
+money — every rule in it was specified by the circle's members and is proved
+against their own worked examples.
+
+## Commands
+
+```bash
+npm install              # workspaces: packages/core, apps/api, apps/admin, apps/mobile
+npm test                 # 217 tests — core (173) then api (44)
+npm run seed             # a circle with eight months of history; asserts the books balance
+npm run dev:api          # API + admin panel on http://localhost:4000
+
+npm test --workspace @mamogoro/core    # just the engine
+npx tsc -p packages/core/tsconfig.json --noEmit
+cd apps/mobile && npm start            # Expo
+```
+
+Node 22.5+ is required — the API uses `node:sqlite`, which is built in. There
+is no native build step and no database server.
+
+The seeded circle signs in with any member's phone number and the password
+`mamogoro123`. The chair is `+255710000000`, the cashier `+255710000137`.
+
+## Layout
+
+| Path | What it is |
+|---|---|
+| `packages/core` | The domain engine. Pure, no I/O, no dependencies. |
+| `apps/api` | REST API. `node:http` + `node:sqlite`, no framework. |
+| `apps/admin/public` | Admin panel: plain ES modules, no build step, served by the API. |
+| `apps/mobile` | Member app: Expo / React Native. |
+
+Build output nests under `dist/src/` (the tsconfig `rootDir` is `.` so tests
+compile alongside source). Entry points are `dist/src/server.js` and
+`dist/src/seed.js`, not `dist/server.js`.
+
+## Invariants — do not break these
+
+**Money is integer shillings.** Never a float, never a decimal string. Crossing
+from a rate back to an amount goes through `applyRate` or `allocate` in
+`money.ts`; `allocate` uses largest-remainder so split amounts always sum to
+exactly the total.
+
+**State is derived, never stored.** The share register, the ledger and every
+loan's position are rebuilt from recorded history on each request
+(`circle.ts`). There are no mutable balance columns. If you are tempted to add
+one, cache on the last transaction id instead.
+
+**A loan's schedule is frozen at disbursement.** It is serialised into
+`loans.schedule_json` and read back from there. A later change to the circle's
+rate must never alter what an existing borrower agreed to.
+
+**The ledger is append-only.** `postEntry` refuses anything that does not
+balance. Corrections are reversals (`reverseEntry`), never edits or deletes.
+A governance vote against a financial record produces a reversal and marks the
+original void — it stays visible.
+
+**Approval is a state transition, not a decision.** A loan approves itself in
+`POST /sponsorships/:id/respond` the moment pledges cover it. Do not add a
+committee step.
+
+## Conventions
+
+- The engine is pure and takes a date rather than reading a clock. Pass `asOf`.
+- Every config number lives in `packages/core/src/config.ts`. Changing policy
+  should never mean changing logic. `validateConfig` rejects contradictory
+  combinations.
+- Route role guards: `CASHIER_ROLES` for anything that records money,
+  `REGISTRAR_ROLES` for enrolment. Reading is open to every member.
+- Admin panel: everything interpolated into `innerHTML` goes through `esc()`.
+- Tests assert the circle's own worked examples (a TSh 50,000,000 loan pays
+  TSh 6,125,000 a month then a flat TSh 35,000,000). If a change makes one of
+  those fail, the change is wrong until the members say otherwise.
+
+## Where things are
+
+- Loan maths: `packages/core/src/amortisation.ts`
+- Investor utilisation waterfall: `packages/core/src/facility.ts`
+- Sponsor cover and the default cascade: `packages/core/src/sponsorship.ts`
+- Rate derivation: `packages/core/src/rate.ts`
+- Voting and what may be deleted: `packages/core/src/governance.ts`
+- Storage ↔ engine bridge: `apps/api/src/circle.ts`
