@@ -19,10 +19,11 @@ circle actually lends out. Every member can read every entry in the books.
 ```
 packages/core     The domain engine. Pure TypeScript, no I/O, no dependencies.
                   Money, shares, interest, amortisation, the facility waterfall,
-                  sponsorship, governance, payments, capital and the ledger. 235 tests
+                  sponsorship, governance, payments, capital, statements and the
+                  ledger.                                     259 tests
 
 apps/api          REST API. Node's built-in HTTP and node:sqlite — no native
-                  build, no database server, no framework.    96 tests
+                  build, no database server, no framework.   109 tests
 
 apps/admin        The admin panel every member can sign into. Plain ES modules,
                   no build step. Served by the API. One module per workspace
@@ -34,7 +35,7 @@ docs/             FINANCIAL-MODEL.md — every rule, worked through.
                   API.md — the endpoints.
 ```
 
-**331 tests, all passing.** The financial rules are proved against the worked
+**368 tests, all passing.** The financial rules are proved against the worked
 examples the circle agreed, not against whatever the code happens to do.
 
 ---
@@ -45,7 +46,7 @@ Requires Node 22.5 or later (for `node:sqlite`). Nothing else.
 
 ```bash
 npm install
-npm test                  # 331 tests across core and api
+npm test                  # 368 tests across core and api
 npm run seed              # a circle with eight months of history
 npm run dev:api           # http://localhost:4000
 ```
@@ -171,6 +172,33 @@ Each member also pays KobeTech a monthly subscription to use the platform.
 That is the operator's revenue and never appears in the circle's ledger. If it
 lapses, borrowing and sponsoring are withheld — but never reading, repaying or
 voting.
+
+### A surplus is not money in the account
+
+The income statement says whether the circle made a surplus; the cash flow
+statement says whether it has anything to show for it. They are different
+questions, and a circle that only reads the first one is the circle that finds
+out at a meeting that it cannot fund the loan it has just approved.
+
+Three sections, named for what the members actually do rather than for a
+textbook: **lending** (money out to borrowers, principal back), **earnings**
+(interest and fees received, less running costs and the investor's return), and
+**capital** (subscriptions, savings and facilities). A circle funding its
+lending out of earnings is compounding; one funding it out of capital is
+growing on money it will have to give back — the same closing balance, a
+completely different position.
+
+Nothing is accumulated separately: every figure is read off the cash lines of
+entries already posted, so `opening + movement = closing` is a fact about the
+ledger rather than a second opinion about it. The page says whether it ties
+back, and would say so loudly if it did not.
+
+Each member also has a statement of their own: every shilling that passed
+between them and the circle, signed from their point of view rather than the
+ledger's, with a running total and their live position — shares held, principal
+still owed, and cover still locked after repayments released the rest. Every
+member can read every other member's, for the same reason they can read the
+ledger.
 
 ### Deletion is by vote — except the books
 

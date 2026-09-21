@@ -817,3 +817,96 @@ one of.
 Where a request cannot be met today, the engine says when it could be — the
 first window whose dependable inflow closes the gap — or says plainly that
 repayments due within 90 days do not close it.
+
+---
+
+## 11. Statements
+
+**Implemented in** `packages/core/src/statements.ts` · **proved in**
+`test/statements.test.ts`
+
+Section 8 gives the circle a balance sheet and an income statement. Neither
+answers the question a meeting actually argues about, which is **where the
+money went**. A circle can post a healthy surplus and have nothing in the
+account: a surplus counts interest *earned*, cash counts interest *received*,
+and the largest movements in a lending circle — money going out on loan and
+coming back — never touch the income statement at all.
+
+### The statement is derived, not accumulated
+
+There is no separate record of cash movements that could drift out of step
+with the ledger. Every figure is read off the `CASH` lines of entries already
+posted: the signed cash on an entry is what moved, and the accounts on the
+other side of that same entry say what it was for. A repayment whose lines are
+`Cash 6,125,000 / Loans 5,000,000 / Interest 1,125,000` therefore splits into
+5,000,000 of lending and 1,125,000 of earnings without anybody classifying it
+by hand.
+
+That makes the statement an audit of the books rather than a second opinion
+about them, and it means
+
+```
+openingCash + netMovement = closingCash
+```
+
+is a fact rather than a hope. `reconciles` asserts it on every statement
+anyway. It is returned rather than thrown, for the same reason `booksBalance`
+is: a report that refuses to render tells nobody anything.
+
+### Three sections, named for what members do
+
+The textbook split — operating, investing, financing — was written for a
+company that makes things, and it files a circle's single largest cash
+movement under a footnote heading. These sections are named for what the
+members recognise:
+
+| Section | What is in it | What it means |
+|---|---|---|
+| **Lending** | Disbursements out, principal back | Usually negative, and that is health: capital being put to work |
+| **Earnings** | Interest and fees received, less running costs and the investor's return | Income in the only form that can pay for anything |
+| **Capital** | Subscriptions, savings, facility drawdowns and repayments | Money from the people who put it up, which the circle earned no part of |
+
+The split exists to answer one question: **what paid for the lending?** A
+circle whose lending is funded by *earnings* is compounding. One whose lending
+is funded by *capital* is growing on borrowed strength. Same closing balance,
+completely different position — and a single net cash figure hides the
+difference entirely.
+
+A reversal is an ordinary entry here, not a special case: it moved cash the
+other way on the day it was posted, and that is what the statement should
+show. A voided entry is not excluded either — voiding marks a record as
+repudiated, but the reversal beside it is what undoes the money. Dropping the
+original would double the correction.
+
+### Member statements
+
+The same discipline for one person. Every movement between a member and the
+circle, with three deliberate choices:
+
+**The sign follows the member, not the ledger.** Money they handed over is
+positive; money they received is negative. That is the opposite of the cash
+flow statement above, and it is what makes the running total mean something to
+the person reading it.
+
+**The cash line is not theirs.** A share subscription debits cash and credits
+share capital, both tagged with the same member id — the id is on the cash
+line so the movement can be traced, not because the cash belongs to them.
+Counting it would net every entry to zero. Only the non-cash side is the
+member's own position.
+
+**Totals follow the lines, the label follows the row.** An instalment is one
+row labelled *Repayment*, because that is what the member paid. But its
+principal and its interest go to different totals, because a statement that
+folded interest into "principal repaid" would overstate what the loan cost and
+understate what the circle earned.
+
+Alongside the movements sits the member's live position: shares held and what
+the stake is worth, principal still outstanding, and cover **still locked** as
+a sponsor — not what they originally pledged, since repayments release cover
+as they arrive (section 6). Quoting the promise would overstate what they are
+carrying.
+
+Every member can read every other member's statement, for the same reason
+every member can read the ledger: a circle where you can only see your own
+account is a circle where you have to take it on trust that everyone else's
+adds up.

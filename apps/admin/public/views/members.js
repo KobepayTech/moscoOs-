@@ -6,6 +6,7 @@
 
 import { esc, html, money, pct } from '../lib/format.js';
 import { api } from '../lib/api.js';
+import { go } from '../lib/router.js';
 import { head, page, stat } from '../lib/ui.js';
 
 export function renderMembers(target) {
@@ -16,7 +17,7 @@ export function renderMembers(target) {
     return (
       head(
         'Members',
-        `${register.memberCount} members holding ${register.issued.toLocaleString()} of ${register.authorized.toLocaleString()} authorised shares.`,
+        `${register.memberCount} members holding ${register.issued.toLocaleString()} of ${register.authorized.toLocaleString()} authorised shares. Open anyone to read their statement.`,
       ) +
       html`
         <div class="grid" style="margin-bottom:16px">
@@ -43,7 +44,7 @@ export function renderMembers(target) {
                 ${members
                   .map(
                     (member) => html`
-                      <tr>
+                      <tr class="clickable" data-member="${esc(member.id)}">
                         <td>
                           <div>${esc(member.fullName)}</div>
                           <div class="mono">${esc(member.phone)}</div>
@@ -74,5 +75,9 @@ export function renderMembers(target) {
         </div>
       `
     );
+  }).then(() => {
+    target.querySelectorAll('[data-member]').forEach((element) => {
+      element.addEventListener('click', () => go('member', element.dataset.member));
+    });
   });
 }

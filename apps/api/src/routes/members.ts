@@ -9,7 +9,9 @@ import {
   holdingValue,
   incomeStatement,
   isFullyPaidMember,
+  liveExposure,
   memberNetWorth,
+  memberStatement,
   netAssetValuePerShare,
   ownershipRatio,
   reconcileContributions,
@@ -31,6 +33,7 @@ import {
   buildBook,
   buildRegister,
   loadConfig,
+  loadPledgeExposures,
   memberOutstandingPrincipal,
   notify,
   post,
@@ -515,6 +518,56 @@ export function registerMemberRoutes(router: Router, db: Db): void {
     },
     { roles: CASHIER_ROLES },
   );
+
+  /**
+   * One member's account with the circle.
+   *
+   * Every shilling that passed between them and the circle, what it was for,
+   * and where they stand now. Open to every member on purpose: a circle where
+   * you can only see your own statement is a circle where you have to trust
+   * that everyone else's adds up.
+   *
+   * The cover figures are the *live* ones — what a sponsor still has locked,
+   * not what they originally promised — because repayments release cover as
+   * they come in, and a statement quoting the promise would overstate what
+   * the member is carrying.
+   */
+  router.get('/members/:id/statement', ({ params, query }) => {
+    const config = loadConfig(db);
+    const member = findMember(db, params.id);
+    const register = buildRegister(db, config);
+    const book = buildBook(db);
+
+    const from = query.get('from') ?? undefined;
+    const to = query.get('to') ?? undefined;
+    const statement = memberStatement(book, member.id, { from, to });
+
+    const exposures = loadPledgeExposures(db, config, member.id);
+    const live = (entry: (typeof exposures)[number]) => liveExposure(entry.pledge, entry.loan);
+    const committed = (entry: (typeof exposures)[number]) =>
+      entry.pledge.status === 'accepted' || entry.pledge.status === 'pending' ? entry.pledge.amount : 0;
+
+    const coverLocked = exposures.reduce((total, entry) => total + live(entry), 0);
+    const coverPledged = exposures.reduce((total, entry) => total + committed(entry), 0);
+
+    return {
+      member: publicMember(member),
+      ...statement,
+      holding: {
+        shares: sharesOf(register, member.id),
+        shareValue: holdingValue(register, member.id),
+        netAssetValue: memberNetWorth(register, member.id, retainedEarnings(book)),
+        ownershipRatio: ownershipRatio(register, member.id),
+      },
+      position: {
+        outstandingPrincipal: memberOutstandingPrincipal(db, config, member.id),
+        coverPledged,
+        coverLocked,
+        coverReleased: coverPledged - coverLocked,
+        availableToPledge: selfCoverForMember(db, config, member.id),
+      },
+    };
+  });
 
   router.get('/members/:id/contributions', ({ params }) => {
     const config = loadConfig(db);

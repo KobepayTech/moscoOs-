@@ -35,8 +35,10 @@ import { renderFacilities } from './views/facilities.js';
 import { renderGovernance } from './views/governance.js';
 import { renderLedger } from './views/ledger.js';
 import { renderLoanDetail, renderLoans } from './views/loans.js';
+import { renderMemberStatement } from './views/member.js';
 import { renderMembers } from './views/members.js';
 import { renderRateModel } from './views/rate.js';
+import { renderReports } from './views/reports.js';
 import { renderSignIn } from './views/signin.js';
 
 const root = document.getElementById('app');
@@ -45,12 +47,14 @@ const ROUTES = {
   dashboard: { label: 'Overview', render: renderDashboard },
   capital: { label: 'Capital', render: renderCapital },
   members: { label: 'Members', render: renderMembers },
+  member: { label: 'Member statement', render: renderMemberStatement, hidden: true },
   loans: { label: 'Loan book', render: renderLoans },
   loan: { label: 'Loan', render: renderLoanDetail, hidden: true },
   cashier: { label: 'Cashier', render: renderCashier },
   facilities: { label: 'External capital', render: renderFacilities },
   rate: { label: 'Rate model', render: renderRateModel },
   ledger: { label: 'Ledger', render: renderLedger },
+  reports: { label: 'Cash flow', render: renderReports },
   governance: { label: 'Votes', render: renderGovernance },
 };
 

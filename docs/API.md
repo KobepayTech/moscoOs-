@@ -112,6 +112,17 @@ authorised capital and the concentration ceiling.
 Must be exactly the agreed monthly amount, and once per member per month. Under
 the default rules it buys one share at par.
 
+### `GET /members/:id/statement` *(all)* — `?from=` `?to=`
+One member's account with the circle: every movement between them and the
+circle, signed from *their* point of view (money they paid in is positive),
+with a `runningTotal` down the rows and `totals` broken out by kind —
+`shares`, `savings`, `borrowed`, `repaid`, `interest`, `fees`, `sponsorCalled`,
+`investor`.
+
+`position.coverLocked` is what they still have at risk as a sponsor *now*, not
+what they originally pledged; `coverReleased` is the difference repayments have
+freed.
+
 ### `GET /members/:id/contributions` *(all)*
 ### `POST /members/:id/fees` *(cashier)*
 `{ "kind": "annual" | "joining" | "penalty" | "other", "amount": ..., "paidOn": "..." }`
@@ -227,6 +238,17 @@ Every entry, the balance sheet and the trial balance. `?asOf=` `?memberId=`
 ### `GET /ledger/:entryId` *(all)*
 ### `GET /reports/income` *(all)* — `?from=` `?to=`
 ### `GET /reports/position` *(all)* — includes `booksBalance`
+
+### `GET /reports/cash-flow` *(all)* — `?from=` `?to=`
+Where the cash went, in three sections: `lending` (out to borrowers, principal
+back), `earnings` (interest and fees received, less running costs and the
+investor's return) and `capital` (subscriptions, savings, facilities).
+
+Derived from the cash lines of entries already posted, never accumulated
+separately, so `openingCash + netMovement === closingCash`. `reconciles` states
+whether it does — surfaced rather than asserted, because a report that refuses
+to render tells nobody anything. `from` is inclusive, so consecutive windows
+must start the day after the previous one ended.
 
 ---
 

@@ -13,6 +13,7 @@
  */
 
 import {
+  cashFlowStatement,
   castVote,
   deletionMode,
   financialPosition,
@@ -130,6 +131,27 @@ export function registerGovernanceRoutes(router: Router, db: Db): void {
   router.get('/reports/income', ({ query }) => {
     const book = buildBook(db);
     return incomeStatement(book, query.get('from') ?? undefined, query.get('to') ?? undefined);
+  });
+
+  /**
+   * Where the cash went.
+   *
+   * The income statement says whether the circle made a surplus; this says
+   * whether it has anything to show for it. They are different questions, and
+   * a circle that only ever reads the first one is the circle that discovers
+   * at a meeting that it cannot fund the loan it just approved.
+   *
+   * `reconciles` is returned rather than asserted, for the same reason
+   * `booksBalance` is below: a report that quietly refuses to render tells
+   * nobody anything.
+   */
+  router.get('/reports/cash-flow', ({ query }) => {
+    const from = query.get('from') ?? undefined;
+    const to = query.get('to') ?? undefined;
+    const book = buildBook(db);
+
+    const statement = cashFlowStatement(book, { from, to });
+    return { ...statement, asOf: to ?? today() };
   });
 
   router.get('/reports/position', ({ query }) => {
