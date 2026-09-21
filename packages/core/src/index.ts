@@ -22,5 +22,6 @@ export * from './sponsorship.js';
 export * from './governance.js';
 export * from './ledger.js';
 export * from './eligibility.js';
+export * from './payments.js';
 
 export const CORE_VERSION = '0.1.0';

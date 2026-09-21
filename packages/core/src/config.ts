@@ -160,6 +160,43 @@ export interface GrowthTargetConfig {
   rateRoundingStep: number;
 }
 
+export interface ApplicationFeeConfig {
+  /** Fixed fee a borrower pays before their request goes out to sponsors. */
+  amount: Money;
+  /** Share the payment rail deducts before remitting to the circle. */
+  processingFeeRate: number;
+  /**
+   * Refund the fee when the loan is not approved.
+   *
+   * When true the fee is a liability on receipt and only becomes income once
+   * the loan is approved — the circle has not earned it until it has done the
+   * thing the member paid for.
+   */
+  refundable: boolean;
+  /**
+   * `net` refunds what the circle actually received; `gross` refunds what the
+   * member paid, with the circle absorbing the rail's charge.
+   */
+  refundMode: 'net' | 'gross';
+  /** Rail used to collect it. */
+  provider: string;
+  /** Days an unpaid application waits before it lapses. */
+  unpaidExpiryDays: number;
+}
+
+export interface PlatformConfig {
+  /** The company operating the software and collecting the subscription. */
+  operator: string;
+  /** Monthly subscription per member. Revenue of the operator, never the circle's. */
+  memberSubscription: Money;
+  /** Days past the start of a month before an unpaid subscription lapses. */
+  subscriptionGraceDays: number;
+  /** Rail used to collect the subscription. */
+  subscriptionProvider: string;
+  /** The circle's account with the remitting rail, where net fees land. */
+  settlementProvider: string;
+}
+
 export interface CircleConfig {
   circleName: string;
   currency: string;
@@ -167,6 +204,8 @@ export interface CircleConfig {
   targetMembership: number;
   shares: ShareConfig;
   membership: MembershipConfig;
+  applicationFee: ApplicationFeeConfig;
+  platform: PlatformConfig;
   termLoan: TermLoanConfig;
   shortTermLoan: ShortTermLoanConfig;
   sponsorship: SponsorshipConfig;
@@ -205,6 +244,25 @@ export function defaultCircleConfig(): CircleConfig {
       gracePeriodDays: 10,
       lateContributionPenalty: 5_000,
       missedContributionsBeforeSuspension: 3,
+    },
+
+    applicationFee: {
+      amount: 50_000,
+      processingFeeRate: 0.05,
+      refundable: true,
+      refundMode: 'net',
+      provider: 'kobepay',
+      unpaidExpiryDays: 7,
+    },
+
+    platform: {
+      operator: 'KobeTech',
+      // PLACEHOLDER — the monthly subscription has not been set. Confirm the
+      // amount before billing anyone.
+      memberSubscription: 5_000,
+      subscriptionGraceDays: 7,
+      subscriptionProvider: 'palmpesa',
+      settlementProvider: 'kobepay',
     },
 
     termLoan: {
@@ -359,6 +417,22 @@ export function validateConfig(config: CircleConfig): ConfigProblem[] {
   }
   if (config.sponsorship.maxSingleSponsorRatio < 0 || config.sponsorship.maxSingleSponsorRatio > 1) {
     fail('sponsorship.maxSingleSponsorRatio', 'Single-sponsor ceiling must be a fraction between 0 and 1');
+  }
+
+  if (config.applicationFee.amount < 0) {
+    fail('applicationFee.amount', 'Application fee must not be negative');
+  }
+  if (config.applicationFee.processingFeeRate < 0 || config.applicationFee.processingFeeRate >= 1) {
+    fail(
+      'applicationFee.processingFeeRate',
+      'Processing fee rate must fall in [0, 1); at 1 or above the circle would receive nothing',
+    );
+  }
+  if (config.platform.memberSubscription < 0) {
+    fail('platform.memberSubscription', 'Subscription must not be negative');
+  }
+  if (config.platform.subscriptionGraceDays < 0) {
+    fail('platform.subscriptionGraceDays', 'Grace period must not be negative');
   }
 
   if (config.governance.quorumRatio < 0 || config.governance.quorumRatio > 1) {

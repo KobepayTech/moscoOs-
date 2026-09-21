@@ -19,6 +19,7 @@
 import {
   addDays,
   applyRepayments,
+  assessApplicationFee,
   assessEligibility,
   buildShortTermLoan,
   buildTermLoanSchedule,
@@ -68,6 +69,7 @@ import {
 import { type Db, newId, nowISO, transact } from '../db.js';
 import { ApiError, type Router, arrayField, dateField, enumField, intField, moneyField, str } from '../http.js';
 import { countContributions, findMember } from './members.js';
+import { applicationFeeState, earnApplicationFee, refundApplicationFee } from './payments.js';
 
 /** Assemble the standing the eligibility engine needs. */
 function standingOf(db: Db, config: ReturnType<typeof loadConfig>, memberId: string, asOf: string): MemberStanding {
@@ -407,6 +409,26 @@ export function registerLoanRoutes(router: Router, db: Db): void {
       throw ApiError.conflict(`Loan ${loan.id} is ${loan.status} and is no longer gathering sponsors`);
     }
 
+    // The application fee buys the circulation of the request, so it is
+    // checked here rather than at application: a member prices a loan for
+    // nothing and pays only when they are ready to ask others to back them.
+    const fee = assessApplicationFee({
+      feeAmount: config.applicationFee.amount,
+      processingFeeRate: config.applicationFee.processingFeeRate,
+      state: applicationFeeState(db, loan.id),
+    });
+
+    if (config.applicationFee.amount > 0 && !fee.mayCirculate) {
+      throw ApiError.unprocessable(fee.reason, {
+        applicationFee: {
+          required: fee.required,
+          outstanding: fee.outstanding,
+          state: fee.state,
+          payAt: `/loans/${loan.id}/application-fee`,
+        },
+      });
+    }
+
     const requests = arrayField<{ sponsorId?: string; amount?: number }>(body, 'sponsors');
     if (requests.length === 0) throw ApiError.badRequest('Name at least one sponsor');
 
@@ -587,6 +609,10 @@ export function registerLoanRoutes(router: Router, db: Db): void {
         db.prepare("UPDATE loans SET status = 'approved', approved_on = ? WHERE id = ?").run(asOf, loan.id);
         approvedNow = true;
 
+        // The circle has now done what the fee paid for, so it is earned and
+        // moves from the held liability into income.
+        earnApplicationFee(db, loan.id, asOf, principal!.memberId);
+
         notify(db, {
           memberId: loan.member_id,
           kind: 'loan_approved',
@@ -656,6 +682,64 @@ export function registerLoanRoutes(router: Router, db: Db): void {
       throw ApiError.conflict('That request has already been answered or withdrawn');
     }
     return { ok: true };
+  });
+
+  /**
+   * Abandon an application that has not been disbursed.
+   *
+   * The borrower may pull their own request; the cashier may close one that
+   * has stalled. Either way the circle has not done what the application fee
+   * paid for, so the held fee goes back.
+   */
+  router.post('/loans/:id/cancel', ({ params, body, principal }) => {
+    const loan = loadLoan(db, params.id);
+    const reason = str(body, 'reason', { max: 300 }) || 'Withdrawn by the applicant';
+    const asOf = today();
+
+    const isBorrower = loan.member_id === principal!.memberId;
+    const isOfficer = ['cashier', 'chair'].includes(principal!.role);
+    if (!isBorrower && !isOfficer) {
+      throw ApiError.forbidden('Only the borrower or the cashier may cancel an application');
+    }
+
+    if (!['draft', 'awaiting_sponsors', 'approved'].includes(loan.status)) {
+      throw ApiError.conflict(`Loan ${loan.id} is ${loan.status} and can no longer be cancelled`);
+    }
+
+    return transact(db, () => {
+      db.prepare("UPDATE loans SET status = 'cancelled', decline_reason = ? WHERE id = ?").run(
+        reason,
+        loan.id,
+      );
+
+      // Release the sponsors: their cover was committed to a loan that will
+      // not now happen.
+      db.prepare(
+        "UPDATE pledges SET status = 'withdrawn' WHERE loan_id = ? AND status IN ('pending','accepted')",
+      ).run(loan.id);
+
+      const refunded = refundApplicationFee(db, loan.id, asOf, reason, principal!.memberId);
+
+      for (const pledge of loadPledges(db, loan.id)) {
+        notify(db, {
+          memberId: pledge.sponsorId,
+          kind: 'sponsorship_released',
+          title: 'A loan you were asked to sponsor was cancelled',
+          body: `${findMember(db, loan.member_id).full_name} withdrew the request, so your cover is free again.`,
+          payload: { loanId: loan.id },
+        });
+      }
+
+      audit(db, {
+        actorId: principal!.memberId,
+        action: 'loan_cancelled',
+        entityType: 'loan',
+        entityId: loan.id,
+        detail: { reason, refunded },
+      });
+
+      return { loanId: loan.id, status: 'cancelled', applicationFeeRefunded: refunded };
+    });
   });
 
   // -------------------------------------------------------------------------

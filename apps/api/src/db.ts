@@ -275,6 +275,67 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE INDEX IF NOT EXISTS idx_notifications_member ON notifications(member_id, read_at);
 
+-- Money arriving through a payment rail.
+--
+-- The idempotency_key column is the whole point of this table: a USSD push
+-- that the handset retries, or a webhook the provider delivers twice, must
+-- never produce two charges or two ledger postings. The unique index makes a
+-- repeat a no-op at the storage layer rather than something every handler has
+-- to remember to guard.
+CREATE TABLE IF NOT EXISTS payment_intents (
+  id               TEXT PRIMARY KEY,
+  idempotency_key  TEXT    NOT NULL UNIQUE,
+  purpose          TEXT    NOT NULL
+                     CHECK (purpose IN ('loan_application_fee','platform_subscription',
+                                        'contribution','membership_fee','loan_repayment')),
+  member_id        TEXT    NOT NULL REFERENCES members(id),
+  loan_id          TEXT REFERENCES loans(id),
+  -- What the member pays, what the rail keeps, what reaches the recipient.
+  gross_amount     INTEGER NOT NULL CHECK (gross_amount > 0),
+  fee_amount       INTEGER NOT NULL DEFAULT 0 CHECK (fee_amount >= 0),
+  net_amount       INTEGER NOT NULL CHECK (net_amount >= 0),
+  -- Who ends up with the net: the circle, or the platform operator.
+  beneficiary      TEXT    NOT NULL CHECK (beneficiary IN ('circle','operator')),
+  provider         TEXT    NOT NULL,
+  provider_ref     TEXT,
+  status           TEXT    NOT NULL
+                     CHECK (status IN ('pending','initiated','confirmed','failed','expired','refunded')),
+  -- Subscription payments name the month they cover.
+  period           TEXT,
+  failure_reason   TEXT,
+  -- Manual payments carry the cashier's evidence instead of a provider ref.
+  proof_reference  TEXT,
+  recorded_by      TEXT REFERENCES members(id),
+  -- Set once the confirmation has posted, so it can never post a second time.
+  ledger_entry_id  TEXT REFERENCES journal_entries(id),
+  refund_entry_id  TEXT REFERENCES journal_entries(id),
+  created_at       TEXT    NOT NULL,
+  initiated_at     TEXT,
+  confirmed_at     TEXT,
+  settled_at       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_payments_member ON payment_intents(member_id, status);
+CREATE INDEX IF NOT EXISTS idx_payments_loan ON payment_intents(loan_id, purpose, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_provider_ref
+  ON payment_intents(provider, provider_ref) WHERE provider_ref IS NOT NULL;
+
+-- A member's platform subscription, month by month.
+--
+-- Deliberately not in the ledger: this is the operator's revenue, and the
+-- circle is not a party to it. Recording it in the circle's books would
+-- overstate what the circle earns.
+CREATE TABLE IF NOT EXISTS platform_subscriptions (
+  id          TEXT PRIMARY KEY,
+  member_id   TEXT    NOT NULL REFERENCES members(id),
+  period      TEXT    NOT NULL,              -- YYYY-MM
+  amount      INTEGER NOT NULL,
+  paid_on     TEXT    NOT NULL,
+  payment_id  TEXT REFERENCES payment_intents(id),
+  created_at  TEXT    NOT NULL,
+  UNIQUE (member_id, period)
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   actor_id    TEXT,

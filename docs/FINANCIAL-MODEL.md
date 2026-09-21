@@ -289,6 +289,86 @@ implemented and tested; the choice is the circle's.
 
 ---
 
+## 4a. Money that is not the circle's
+
+Two flows run alongside the circle's own money and are deliberately kept apart
+from it, because treating them as circle income would overstate what the
+members have earned.
+
+**Implemented in** `packages/core/src/payments.ts` · **proved in**
+`test/payments.test.ts` and `apps/api/test/payments.test.ts`
+
+### The loan application fee
+
+A borrower pays **TSh 50,000** before their request is circulated to sponsors.
+KobeTech collects it over USSD, keeps **5%**, and remits the rest to the
+circle's KobePay account.
+
+```
+member pays ................. 50,000
+KobeTech's charge (5%) ......  2,500
+reaches the circle .......... 47,500
+```
+
+Three things follow from that, and all three are load-bearing:
+
+**Only the net touches the books.** The circle receives 47,500 and never holds
+the 2,500 — that was settled between the member and the rail. Posting the
+gross would record money the circle never had.
+
+**It is a liability, not income.** The fee is refundable until the loan is
+decided, so on receipt it is credited to *Application fees held pending a
+decision*. Only when the loan is approved has the circle done the thing the
+member paid for, and only then does it become fee income:
+
+| Event | Debit | Credit |
+|---|---|---|
+| Fee confirmed | Cash 47,500 | Application fees held 47,500 |
+| Loan approved | Application fees held 47,500 | Fee income 47,500 |
+| Loan cancelled | Application fees held 47,500 | Cash 47,500 |
+
+**A refund returns the net.** The circle can only give back what it received.
+The member is told this in the quote, before they pay, and again in the refund
+notice.
+
+The fee gates the *sponsor request*, not the application. A member can fill in
+and price a loan for nothing; they pay when they are ready to ask other people
+to put their shares behind it. Charging before the applicant knows what they
+would repay would be charging for information they should have had free.
+
+### The platform subscription
+
+Each member pays **KobeTech** monthly, through PalmPesa, to use the software.
+This never touches the circle's ledger at all: it is the operator's revenue
+and the circle is not a party to it. The platform records it only to know who
+may use the features it gates.
+
+When a subscription lapses, the platform withholds **borrowing and
+sponsoring** — and nothing else. A member whose software bill is unpaid can
+still:
+
+- see their own money, their loans and the whole ledger;
+- repay what they owe;
+- **vote**.
+
+That line is deliberate. Locking someone out of their own savings over a
+software bill would be indefensible, and a subscription billed by the operator
+must not be able to disenfranchise a member inside their own circle. A member
+is also given a grace period before a missed month counts as a lapse at all.
+
+### Payments are safe to repeat
+
+Every payment is an *intent* carrying an idempotency key. A USSD prompt the
+member retries, a callback the rail delivers twice, a cashier who taps confirm
+again — none of these charge twice or post twice. The key makes a repeated
+request return the existing intent; a `ledger_entry_id` on the intent makes a
+second posting impossible.
+
+Callbacks are authenticated before they are believed. An unverified callback
+would let anyone who can reach the endpoint credit any account.
+
+---
+
 ## 5. External capital and the utilisation waterfall
 
 **Implemented in** `packages/core/src/facility.ts` · **proved in** `test/facility.test.ts`

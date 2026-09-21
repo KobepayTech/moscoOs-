@@ -293,6 +293,32 @@ describe('a loan from application to repayment', () => {
     assert.match((body!.error as never as { message: string }).message, /fully sponsored/);
   });
 
+  /**
+   * The application fee now gates circulation, so the flow pays it here. It
+   * is charged for sending the request to sponsors, not for making the
+   * application, which is why it falls between applying and asking.
+   */
+  it('pays the application fee before asking anyone', async () => {
+    const started = await call(`/loans/${loanId}/application-fee`, {
+      method: 'POST',
+      token: borrowerToken,
+      body: {},
+    });
+    assert.equal(started.status, 200, JSON.stringify(started.body));
+
+    const split = started.body!.split as never as { gross: number; net: number };
+    assert.equal(split.gross, 50_000);
+    assert.equal(split.net, 47_500);
+
+    const payment = started.body!.payment as never as { id: string };
+    const confirmed = await call(`/payments/${payment.id}/confirm`, {
+      method: 'POST',
+      token: cashierToken,
+      body: { proof: 'KOBEPAY-TEST', paidOn: disbursedOn },
+    });
+    assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body));
+  });
+
   it('suggests sponsors with the capacity to help', async () => {
     const { body } = await call(`/loans/${loanId}/sponsor-suggestions`, { token: borrowerToken });
     const suggestions = body!.suggestions as never as { memberId: string; suggestedPledge: number }[];

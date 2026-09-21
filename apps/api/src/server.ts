@@ -15,6 +15,7 @@ import { registerFacilityRoutes } from './routes/facilities.js';
 import { registerGovernanceRoutes } from './routes/governance.js';
 import { registerLoanRoutes } from './routes/loans.js';
 import { registerMemberRoutes } from './routes/members.js';
+import { registerPaymentRoutes } from './routes/payments.js';
 
 export function buildRouter(db: Db): Router {
   const router = new Router();
@@ -32,6 +33,7 @@ export function buildRouter(db: Db): Router {
   registerDashboardRoutes(router, db);
   registerMemberRoutes(router, db);
   registerLoanRoutes(router, db);
+  registerPaymentRoutes(router, db);
   registerFacilityRoutes(router, db);
   registerGovernanceRoutes(router, db);
   return router;

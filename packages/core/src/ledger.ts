@@ -33,6 +33,7 @@ export type AccountCode =
   | 'FACILITY_PRINCIPAL'
   | 'FACILITY_INTEREST_PAYABLE'
   | 'MEMBER_SAVINGS'
+  | 'APPLICATION_FEES_HELD'
   // Equity
   | 'SHARE_CAPITAL'
   | 'RETAINED_EARNINGS'
@@ -88,6 +89,12 @@ export const CHART_OF_ACCOUNTS: Record<AccountCode, Account> = {
   MEMBER_SAVINGS: {
     code: 'MEMBER_SAVINGS',
     name: 'Member savings balances',
+    type: 'liability',
+    normalBalance: 'credit',
+  },
+  APPLICATION_FEES_HELD: {
+    code: 'APPLICATION_FEES_HELD',
+    name: 'Application fees held pending a decision',
     type: 'liability',
     normalBalance: 'credit',
   },
@@ -478,6 +485,55 @@ export function feeEntry(
       debit('CASH', args.amount, { memberId: args.memberId }),
       credit('FEE_INCOME', args.amount, { memberId: args.memberId }),
     ],
+  };
+}
+
+/**
+ * A loan application fee arrives.
+ *
+ * Only the **net** is posted — the amount that actually reached the circle.
+ * The rail's charge was settled between the member and the rail; the circle
+ * never held it, so recording it here as either income or expense would state
+ * something untrue about the circle's money.
+ *
+ * It lands as a liability, not income. The circle has not earned it until the
+ * loan is approved, and owes it back if it is not.
+ */
+export function applicationFeeHeldEntry(
+  ctx: EntryContext,
+  args: { memberId: string; loanId: string; net: Money },
+): JournalEntry {
+  const tags = { memberId: args.memberId, loanId: args.loanId };
+  return {
+    ...ctx,
+    narration: `Application fee received for loan ${args.loanId}, held pending a decision`,
+    lines: [debit('CASH', args.net, tags), credit('APPLICATION_FEES_HELD', args.net, tags)],
+  };
+}
+
+/** The loan was approved, so the held fee has been earned. */
+export function applicationFeeEarnedEntry(
+  ctx: EntryContext,
+  args: { memberId: string; loanId: string; net: Money },
+): JournalEntry {
+  const tags = { memberId: args.memberId, loanId: args.loanId };
+  return {
+    ...ctx,
+    narration: `Application fee earned on approval of loan ${args.loanId}`,
+    lines: [debit('APPLICATION_FEES_HELD', args.net, tags), credit('FEE_INCOME', args.net, tags)],
+  };
+}
+
+/** The loan did not go ahead: the held fee goes back to the member. */
+export function applicationFeeRefundedEntry(
+  ctx: EntryContext,
+  args: { memberId: string; loanId: string; amount: Money },
+): JournalEntry {
+  const tags = { memberId: args.memberId, loanId: args.loanId };
+  return {
+    ...ctx,
+    narration: `Application fee refunded for loan ${args.loanId}`,
+    lines: [debit('APPLICATION_FEES_HELD', args.amount, tags), credit('CASH', args.amount, tags)],
   };
 }
 
