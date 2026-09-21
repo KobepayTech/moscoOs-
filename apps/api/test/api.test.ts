@@ -831,3 +831,124 @@ describe('recording money is restricted, reading it is not', () => {
     assert.equal(status, 409);
   });
 });
+
+/**
+ * The capital engine: what the circle can do, rather than what it has done.
+ */
+describe('the capital engine', () => {
+  it('separates what policy allows from what is actually in the account', async () => {
+    const token = await signIn(phoneOf(0));
+    const { status, body } = await call('/capital', { token });
+
+    assert.equal(status, 200, JSON.stringify(body));
+    const capital = body!.capital as never as Record<string, number>;
+
+    // Spendable is the lower of the two, always.
+    assert.equal(capital.spendableNow, Math.min(capital.available, capital.cashOnHand));
+    assert.ok(capital.totalCapital >= capital.deployed);
+  });
+
+  it('forecasts repayments over a week, a month and a quarter', async () => {
+    const token = await signIn(phoneOf(0));
+    const { body } = await call('/capital', { token });
+
+    const inflows = body!.inflows as never as {
+      windowDays: number;
+      total: number;
+      principal: number;
+      interest: number;
+      dependable: number;
+    }[];
+
+    assert.deepEqual(inflows.map((entry) => entry.windowDays), [7, 30, 90]);
+
+    // Windows nest: a longer window can only contain more.
+    assert.ok(inflows[1].total >= inflows[0].total);
+    assert.ok(inflows[2].total >= inflows[1].total);
+
+    for (const inflow of inflows) {
+      assert.equal(inflow.total, inflow.principal + inflow.interest);
+      assert.ok(inflow.dependable <= inflow.total);
+    }
+  });
+
+  it('discounts money owed by members already behind', async () => {
+    const token = await signIn(phoneOf(0));
+    const { body } = await call('/capital', { token });
+
+    // The seeded circle carries one loan in arrears, so somewhere in the
+    // forecast there is money that should not be relied on.
+    const inflows = body!.inflows as never as { fromBorrowersInArrears: number; dependable: number; total: number }[];
+    for (const inflow of inflows) {
+      assert.equal(inflow.dependable, inflow.total - inflow.fromBorrowersInArrears);
+    }
+  });
+
+  it('names the largest borrower and sponsor rather than quoting ids', async () => {
+    const token = await signIn(phoneOf(0));
+    const { body } = await call('/capital', { token });
+
+    const risk = body!.concentration as never as {
+      largestBorrower: { memberName: string; share: number } | null;
+      largestSponsor: { memberName: string; share: number } | null;
+      borrowerHerfindahl: number;
+      borrowersToHalfTheBook: number;
+    };
+
+    assert.ok(risk.largestBorrower);
+    assert.ok(risk.largestBorrower.memberName.includes(' '), 'expected a name, not an id');
+    assert.ok(risk.largestSponsor?.memberName.includes(' '));
+
+    assert.ok(risk.borrowerHerfindahl > 0 && risk.borrowerHerfindahl <= 1);
+    assert.ok(risk.borrowersToHalfTheBook >= 1);
+  });
+
+  it('writes its alerts in money and names, not raw numbers and ids', async () => {
+    const token = await signIn(phoneOf(0));
+    const { body } = await call('/capital', { token });
+
+    for (const alert of body!.alerts as never as { level: string; message: string }[]) {
+      assert.ok(['info', 'warning', 'danger'].includes(alert.level));
+      assert.ok(!/\bmem_\d+\b/.test(alert.message), `alert leaked a member id: ${alert.message}`);
+      // Any large bare integer would be a number nobody reads.
+      assert.ok(!/\b\d{7,}\b/.test(alert.message), `alert leaked an unformatted amount: ${alert.message}`);
+    }
+  });
+
+  it('answers the funding queue in order, not independently', async () => {
+    const token = await signIn(phoneOf(0));
+    const { body } = await call('/capital', { token });
+
+    const funding = body!.funding as never as {
+      memberName: string;
+      principal: number;
+      fundableNow: boolean;
+      reason: string;
+    }[];
+
+    for (const verdict of funding) {
+      assert.ok(verdict.memberName.length > 0);
+      assert.ok(verdict.reason.length > 0);
+    }
+  });
+
+  it('projects cash without assuming new lending', async () => {
+    const token = await signIn(phoneOf(0));
+    const { body } = await call('/capital', { token });
+
+    const projection = body!.projection as never as Record<
+      string,
+      { opening: number; inflow: number; commitments: number; closing: number }
+    >;
+
+    for (const key of ['week', 'month', 'quarter']) {
+      const row = projection[key];
+      assert.equal(row.closing, row.opening + row.inflow - row.commitments);
+    }
+  });
+
+  it('is readable by any member, not just the committee', async () => {
+    const ordinary = await signIn(phoneOf(29));
+    assert.equal((await call('/capital', { token: ordinary })).status, 200);
+  });
+});

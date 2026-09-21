@@ -9,7 +9,7 @@ against their own worked examples.
 
 ```bash
 npm install              # workspaces: packages/core, apps/api, apps/admin, apps/mobile
-npm test                 # 296 tests — core (208) then api (88)
+npm test                 # 331 tests — core (235) then api (96)
 npm run seed             # a circle with eight months of history; asserts the books balance
 npm run dev:api          # API + admin panel on http://localhost:4000
 
@@ -82,4 +82,6 @@ committee step.
 - Sponsor cover and the default cascade: `packages/core/src/sponsorship.ts`
 - Rate derivation: `packages/core/src/rate.ts`
 - Voting and what may be deleted: `packages/core/src/governance.ts`
+- Lendable capital, forecasts and concentration: `packages/core/src/capital.ts`
+- Application fee and subscription: `packages/core/src/payments.ts`
 - Storage ↔ engine bridge: `apps/api/src/circle.ts`

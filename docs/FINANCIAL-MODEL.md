@@ -752,3 +752,68 @@ Every one of these lives in `packages/core/src/config.ts` and can be changed
 without touching a line of logic. `validateConfig()` refuses combinations that
 contradict each other — most importantly, a lending rate at or below the cost
 of external capital, which would make every facility-funded loan lose money.
+
+---
+
+## 10. The capital engine
+
+**Implemented in** `packages/core/src/capital.ts` · **proved in** `test/capital.test.ts`
+
+Every other part of this model answers a question about one loan, one member
+or one facility. This answers questions about the circle as a whole, and about
+the future rather than the past: what can we lend today, what is coming back,
+where has the risk bunched up, and which of the waiting requests can we
+actually fund.
+
+That is the difference between book-keeping and treasury. A ledger tells the
+committee what happened; this tells them what they can do.
+
+### Available is not the same as spendable
+
+Two numbers get confused constantly, and the engine keeps them apart:
+
+- **available** — what policy allows to be lent: total capital less what is
+  already out.
+- **cash on hand** — money actually in the account.
+
+They diverge because cash includes amounts the circle holds but does not own:
+application fees awaiting a decision, members' savings, a facility drawn but
+not yet lent. **A circle can look under-lent on paper and still be unable to
+disburse.** What can go out of the door is the lower of the two, and that is
+what the cashier is shown.
+
+The engine raises a danger alert when approved loans total more than can be
+released — the circle has promised money it cannot pay.
+
+### What is coming back
+
+Scheduled repayments over the next 7, 30 and 90 days, with principal and
+interest separated because only principal replenishes lendable capital.
+
+Two rules keep the forecast honest:
+
+- **Overdue amounts are never counted as future inflow.** Money that was due
+  in April is not "expected in the next 30 days".
+- **Money owed by members already behind is counted separately.** A borrower
+  who missed last month's instalment is the least likely to make next
+  month's. The `dependable` figure excludes them, and that is the figure used
+  to promise anybody a funding date.
+
+### Concentration
+
+Borrowers ranked by what they owe, sponsors by what they still have locked
+(not what they promised — see the release rule above). Plus a Herfindahl
+index of the loan book: the sum of squared shares, where 1.0 means one
+borrower holds everything and 1/n means it is spread evenly across n. One
+number the committee can watch move, where a list of borrowers is only a list.
+
+### What can be funded
+
+The waiting queue is worked through **in order**, spending the purse down:
+the second request is answered from what the first leaves. Answering each
+independently would tell a committee it can fund four loans it can only fund
+one of.
+
+Where a request cannot be met today, the engine says when it could be — the
+first window whose dependable inflow closes the gap — or says plainly that
+repayments due within 90 days do not close it.

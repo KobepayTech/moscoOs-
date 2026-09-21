@@ -10,6 +10,7 @@
 import {
   accrueFacilityInterest,
   breakEvenUtilisation,
+  capitalPosition,
   deriveSustainableRate,
   facilityOutstanding,
   financialPosition,
@@ -19,6 +20,7 @@ import {
   lendingHeadroom,
   mergeConfig,
   netAssetValuePerShare,
+  projectCash,
   projectEquityGrowth,
   rateInputsFromConfig,
   rateSensitivity,
@@ -31,6 +33,7 @@ import {
 import {
   buildBook,
   buildRegister,
+  capitalInputs,
   loadConfig,
   loadFacilities,
   loadSnapshots,
@@ -162,6 +165,67 @@ export function registerDashboardRoutes(router: Router, db: Db): void {
         `${formatMoney(deployed, config.currency)} of ${formatMoney(headroom.totalCapital, config.currency)} ` +
         `is out on loan (${(headroom.utilisationRatio * 100).toFixed(1)}%). ` +
         `${formatMoney(headroom.available, config.currency)} is free to lend.`,
+    };
+  });
+
+  /**
+   * The capital engine.
+   *
+   * What the circle can lend today, what is coming back and when, where the
+   * risk is concentrated, and which of the waiting requests can actually be
+   * funded. This is the difference between knowing what happened and knowing
+   * what the circle can do.
+   */
+  router.get('/capital', ({ query }) => {
+    const config = loadConfig(db);
+    const asOf = query.get('asOf') ?? today();
+
+    // Cache the lookup: the alerts, the rankings and the funding queue all
+    // resolve names, and the same handful of members appear throughout.
+    const names = new Map<string, string>();
+    const named = (memberId: string) => {
+      let name = names.get(memberId);
+      if (name === undefined) {
+        const row = db.prepare('SELECT full_name FROM members WHERE id = ?').get(memberId) as unknown as
+          | { full_name: string }
+          | undefined;
+        name = row?.full_name ?? memberId;
+        names.set(memberId, name);
+      }
+      return name;
+    };
+
+    // The engine holds no opinion about currency or who members are, so the
+    // alerts it writes are given the means to read properly.
+    const position = capitalPosition(config, capitalInputs(db, config, asOf), {
+      formatAmount: (value) => formatMoney(value, config.currency),
+      nameOf: named,
+    });
+
+    const withName = <T extends { memberId: string }>(entry: T) => ({
+      ...entry,
+      memberName: named(entry.memberId),
+    });
+
+    return {
+      ...position,
+      concentration: {
+        ...position.concentration,
+        borrowers: position.concentration.borrowers.map(withName),
+        sponsors: position.concentration.sponsors.map(withName),
+        largestBorrower: position.concentration.largestBorrower
+          ? withName(position.concentration.largestBorrower)
+          : null,
+        largestSponsor: position.concentration.largestSponsor
+          ? withName(position.concentration.largestSponsor)
+          : null,
+      },
+      funding: position.funding.map(withName),
+      projection: {
+        week: projectCash(position, 7),
+        month: projectCash(position, 30),
+        quarter: projectCash(position, 90),
+      },
     };
   });
 

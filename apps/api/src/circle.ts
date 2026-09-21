@@ -29,12 +29,15 @@ import {
   assertValidConfig,
   buildShortTermLoan,
   buildTermLoanSchedule,
+  cashPosition,
+  coverageStatus,
   createBook,
   createRegister,
   defaultCircleConfig,
   deployedPrincipal,
   issuedCapital,
   lendingHeadroom,
+  liveExposure,
   mergeConfig,
   postEntry,
   selfCoverFor,
@@ -42,6 +45,10 @@ import {
   shortTermLoanState,
   totalPledgedOut,
   today,
+  type CapitalInputs,
+  type CollateralCommitment,
+  type LoanSnapshot,
+  type PendingRequest,
 } from '@mamogoro/core';
 
 import { type Db, newId, nowISO } from './db.js';
@@ -465,6 +472,177 @@ export function loanPosition(db: Db, config: CircleConfig, loan: LoanRow, asOf =
     dailyPenaltyRate: config.shortTermLoan.dailyPenaltyRate,
   });
   return { product: 'short_term' as const, loan: loan_, state, repayments };
+}
+
+/**
+ * A loan as the capital engine needs to see it.
+ *
+ * The engine is pure, so the forward schedule has to be handed to it rather
+ * than looked up: every instalment not yet settled, with principal and
+ * interest kept apart because only the principal replenishes lendable
+ * capital.
+ */
+export function loanSnapshot(
+  db: Db,
+  config: CircleConfig,
+  row: LoanRow,
+  asOf = today(),
+): LoanSnapshot {
+  const position = loanPosition(db, config, row, asOf);
+
+  if (position.product === 'term') {
+    const state = position.state;
+    return {
+      loanId: row.id,
+      memberId: row.member_id,
+      originalPrincipal: row.principal,
+      principalOutstanding: state.principalOutstanding,
+      status: row.status,
+      upcoming: state.rows
+        .filter((entry) => !entry.settled)
+        .map((entry) => ({
+          dueOn: entry.row.dueOn,
+          // What is actually left on this instalment, not its original size.
+          principal: entry.principalOutstanding,
+          interest: entry.interestOutstanding,
+          total: entry.principalOutstanding + entry.interestOutstanding,
+        }))
+        .filter((entry) => entry.total > 0),
+      arrears: state.arrears,
+      daysPastDue: state.daysPastDue,
+    };
+  }
+
+  // A short-term loan is a single bullet: one payment, on one day.
+  const state = position.state;
+  const outstanding = state.outstanding;
+
+  return {
+    loanId: row.id,
+    memberId: row.member_id,
+    originalPrincipal: row.principal,
+    principalOutstanding: outstanding,
+    status: row.status,
+    upcoming:
+      outstanding > 0
+        ? [
+            {
+              dueOn: position.loan.dueOn,
+              principal: Math.min(outstanding, row.principal),
+              interest: nonNegativeDifference(outstanding, row.principal),
+              total: outstanding,
+            },
+          ]
+        : [],
+    arrears: state.daysPastDue > 0 ? state.payoffAmount : 0,
+    daysPastDue: state.daysPastDue,
+  };
+}
+
+function nonNegativeDifference(outstanding: Money, principal: Money): Money {
+  return outstanding > principal ? outstanding - principal : 0;
+}
+
+/** Every live loan, snapshotted for the capital engine. */
+export function liveLoanSnapshots(db: Db, config: CircleConfig, asOf = today()): LoanSnapshot[] {
+  const rows = db
+    .prepare("SELECT * FROM loans WHERE status IN ('disbursed','defaulted')")
+    .all() as unknown as LoanRow[];
+
+  return rows.map((row) => loanSnapshot(db, config, row, asOf));
+}
+
+/**
+ * Every sponsor's live commitment across the whole circle.
+ *
+ * Reports what is still at risk, not what was promised, so the concentration
+ * figures reflect who is actually carrying the circle today.
+ */
+export function allCollateralCommitments(
+  db: Db,
+  config: CircleConfig,
+  asOf = today(),
+): CollateralCommitment[] {
+  const rows = db
+    .prepare("SELECT * FROM pledges WHERE status IN ('accepted','called')")
+    .all() as unknown as { id: string; loan_id: string; sponsor_id: string; amount: number; status: string }[];
+
+  const commitments: CollateralCommitment[] = [];
+
+  for (const row of rows) {
+    const loanRow = db.prepare('SELECT * FROM loans WHERE id = ?').get(row.loan_id) as unknown as
+      | LoanRow
+      | undefined;
+    if (!loanRow) continue;
+
+    const pledge: Pledge = {
+      id: row.id,
+      loanId: row.loan_id,
+      sponsorId: row.sponsor_id,
+      amount: row.amount,
+      status: row.status as Pledge['status'],
+      requestedOn: asOf,
+      expiresOn: asOf,
+    };
+
+    const state = loanRow.disbursed_on
+      ? (() => {
+          const snapshot = loanSnapshot(db, config, loanRow, asOf);
+          return {
+            originalPrincipal: snapshot.originalPrincipal,
+            principalOutstanding: snapshot.principalOutstanding,
+            status: snapshot.status,
+          };
+        })()
+      : null;
+
+    commitments.push({
+      sponsorId: row.sponsor_id,
+      loanId: row.loan_id,
+      pledged: row.amount,
+      atRisk: liveExposure(pledge, state),
+    });
+  }
+
+  return commitments;
+}
+
+/** Requests waiting on money or on sponsors. */
+export function pendingRequests(db: Db, config: CircleConfig, asOf = today()): PendingRequest[] {
+  const rows = db
+    .prepare("SELECT * FROM loans WHERE status IN ('awaiting_sponsors','approved') ORDER BY applied_on")
+    .all() as unknown as LoanRow[];
+
+  return rows.map((row) => {
+    const coverage = coverageStatus(sponsorshipRequestFor(db, row), {
+      selfCover: selfCoverForMember(db, config, row.member_id, asOf),
+      asOf,
+    });
+
+    return {
+      loanId: row.id,
+      memberId: row.member_id,
+      principal: row.principal,
+      fullyCovered: coverage.fullyCovered,
+      approved: row.status === 'approved',
+    };
+  });
+}
+
+/** Everything the capital engine needs, read from the books. */
+export function capitalInputs(db: Db, config: CircleConfig, asOf = today()): CapitalInputs {
+  const register = buildRegister(db, config, asOf);
+  const book = buildBook(db, asOf);
+
+  return {
+    asOf,
+    equityPool: issuedCapital(register),
+    cashOnHand: cashPosition(book, asOf),
+    facilities: loadFacilities(db),
+    loans: liveLoanSnapshots(db, config, asOf),
+    collateral: allCollateralCommitments(db, config, asOf),
+    pending: pendingRequests(db, config, asOf),
+  };
 }
 
 /** Principal a member currently owes across every live loan. */
