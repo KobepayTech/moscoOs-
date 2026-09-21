@@ -9,7 +9,7 @@ against their own worked examples.
 
 ```bash
 npm install              # workspaces: packages/core, apps/api, apps/admin, apps/mobile
-npm test                 # 290 tests — core (203) then api (87)
+npm test                 # 296 tests — core (208) then api (88)
 npm run seed             # a circle with eight months of history; asserts the books balance
 npm run dev:api          # API + admin panel on http://localhost:4000
 

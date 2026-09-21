@@ -512,9 +512,49 @@ capacity is capacity that cannot back anybody else — so over-locking quietly
 shrinks how much the circle can lend. The sponsors of a nearly-repaid loan
 should be backing the next one, not sitting idle.
 
+### It moves with the principal, after the interest is taken off
+
+This is the part that is easy to get wrong. The instalment and the repayment
+are different numbers:
+
+```
+instalment paid ........... 6,125,000
+  less interest ........... 1,125,000   ← the cost of the loan, not a repayment
+  principal repaid ........ 5,000,000   ← only this moves the collateral
+```
+
+Collateral is released against the **5,000,000**, never the 6,125,000. Freeing
+against the gross payment would release more than the borrower has actually
+repaid and leave the circle under-covered — by the end of a three-month loan
+the gap would be the whole 3,375,000 of interest.
+
+Stepping through the founding example, with a sponsor who pledged 5,000,000:
+
+| After | Paid | of which interest | of which principal | Owing | Sponsor carries |
+|---|---|---|---|---|---|
+| month 1 | 6,125,000 | 1,125,000 | 5,000,000 | 45,000,000 | 4,500,000 |
+| month 2 | 6,125,000 | 1,125,000 | 5,000,000 | 40,000,000 | 4,000,000 |
+| month 3 | 6,125,000 | 1,125,000 | 5,000,000 | 35,000,000 | 3,500,000 |
+| balloon | 35,000,000 | 0 | 35,000,000 | 0 | 0 |
+
+### The invariant
+
+Because release is proportional, **total cover always equals what is still
+owed**. On the founding loan — nine sponsors at 5,000,000 plus the borrower's
+own 5,000,000 against a 50,000,000 debt — the two move together at every step.
+The circle is never under-covered, and never holds collateral against money
+that has already come home.
+
+That invariant is asserted in the tests at every instalment, so a change that
+breaks it fails the build.
+
 The figure is rounded **up**, so it never claims a sponsor is freer than they
 are. A defaulted loan stays fully locked: that is precisely when cover is
 called. A cancelled application releases everything at once.
+
+Sponsors are told when it happens. Each repayment sends every sponsor a note
+saying what was freed and what they still carry, so the release is something
+they see rather than something they would have to go looking for.
 
 ### When a loan defaults
 

@@ -1063,6 +1063,56 @@ export function registerLoanRoutes(router: Router, db: Db): void {
             ? position.state.status === 'settled'
             : position.state.status === 'settled';
 
+        // Tell the sponsors their collateral has moved.
+        //
+        // Only the principal part of the payment releases anything — the
+        // interest is the cost of the loan, not a reduction of it — so the
+        // release is measured against `towardPrincipal`, never the amount
+        // handed over. A sponsor should see their stake coming back as the
+        // borrower pays, not discover it months later at settlement.
+        const outstandingAfter =
+          position.product === 'term'
+            ? position.state.principalOutstanding
+            : position.state.outstanding;
+        const outstandingBefore = outstandingAfter + towardPrincipal;
+
+        const released: { sponsorId: string; amount: number }[] = [];
+
+        if (towardPrincipal > 0 && !cleared) {
+          for (const pledge of loadPledges(db, loan.id)) {
+            if (pledge.status !== 'accepted') continue;
+
+            const before = liveExposure(pledge, {
+              originalPrincipal: loan.principal,
+              principalOutstanding: outstandingBefore,
+              status: 'disbursed',
+            });
+            const after = liveExposure(pledge, {
+              originalPrincipal: loan.principal,
+              principalOutstanding: outstandingAfter,
+              status: loan.status,
+            });
+
+            if (before <= after) continue;
+
+            released.push({ sponsorId: pledge.sponsorId, amount: before - after });
+
+            notify(db, {
+              memberId: pledge.sponsorId,
+              kind: 'sponsorship_released',
+              title: `${formatMoney(before - after, config.currency)} of your stake has been freed`,
+              body:
+                `${findMember(db, loan.member_id).full_name} repaid ` +
+                `${formatMoney(towardPrincipal, config.currency)} of principal on ` +
+                `${formatMoney(loan.principal, config.currency)}, so your cover falls from ` +
+                `${formatMoney(before, config.currency)} to ${formatMoney(after, config.currency)}. ` +
+                'You can pledge the difference to someone else.',
+              payload: { loanId: loan.id, released: before - after, stillAtRisk: after },
+              actionUrl: '/sponsorships',
+            });
+          }
+        }
+
         if (cleared) {
           db.prepare("UPDATE loans SET status = 'settled', settled_on = ? WHERE id = ?").run(paidOn, loan.id);
           notify(db, {
@@ -1097,6 +1147,8 @@ export function registerLoanRoutes(router: Router, db: Db): void {
 
         return {
           recorded: { amount, paidOn, towardPrincipal, towardInterest, towardPenalty },
+          /** Collateral freed by this payment, per sponsor. */
+          sponsorsReleased: released,
           loan: loanSummary(db, config, loadLoan(db, loan.id), paidOn),
         };
       });

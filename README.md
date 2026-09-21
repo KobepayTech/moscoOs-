@@ -19,10 +19,10 @@ circle actually lends out. Every member can read every entry in the books.
 ```
 packages/core     The domain engine. Pure TypeScript, no I/O, no dependencies.
                   Money, shares, interest, amortisation, the facility waterfall,
-                  sponsorship, governance, payments and the ledger.  203 tests
+                  sponsorship, governance, payments and the ledger.  208 tests
 
 apps/api          REST API. Node's built-in HTTP and node:sqlite — no native
-                  build, no database server, no framework.    87 tests
+                  build, no database server, no framework.    88 tests
 
 apps/admin        The admin panel every member can sign into. Plain ES modules,
                   no build step. Served by the API.
@@ -33,7 +33,7 @@ docs/             FINANCIAL-MODEL.md — every rule, worked through.
                   API.md — the endpoints.
 ```
 
-**290 tests, all passing.** The financial rules are proved against the worked
+**296 tests, all passing.** The financial rules are proved against the worked
 examples the circle agreed, not against whatever the code happens to do.
 
 ---
@@ -44,7 +44,7 @@ Requires Node 22.5 or later (for `node:sqlite`). Nothing else.
 
 ```bash
 npm install
-npm test                  # 290 tests across core and api
+npm test                  # 296 tests across core and api
 npm run seed              # a circle with eight months of history
 npm run dev:api           # http://localhost:4000
 ```

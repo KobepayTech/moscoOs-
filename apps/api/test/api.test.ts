@@ -501,6 +501,30 @@ describe('a loan from application to repayment', () => {
     assert.ok(Math.abs(pledge.releasedRatio - 0.1) < 1e-9);
   });
 
+  /**
+   * The release is measured against the principal portion, never the amount
+   * handed over — the interest is the cost of the loan, not a reduction of it.
+   */
+  it('tells each sponsor what the repayment freed, counting principal only', async () => {
+    const sponsor = await signIn(phoneOf(18));
+    const { body } = await call('/notifications', { token: sponsor });
+
+    const release = (body!.notifications as never as {
+      kind: string;
+      title: string;
+      body: string;
+      payload: { loanId: string; released: number; stillAtRisk: number } | null;
+    }[]).find((entry) => entry.kind === 'sponsorship_released' && entry.payload?.loanId === loanId);
+
+    assert.ok(release, 'expected the sponsor to be told their stake had moved');
+
+    // The member paid 1,225,000 but only 1,000,000 of it was principal, so a
+    // tenth of the 4,000,000 pledge is freed — not a tenth of the payment.
+    assert.equal(release.payload!.released, 400_000);
+    assert.equal(release.payload!.stillAtRisk, 3_600_000);
+    assert.match(release.body, /TSh 1,000,000 of principal/);
+  });
+
   it('gives that released capacity back for sponsoring someone else', async () => {
     const sponsor = await signIn(phoneOf(18));
     const { body } = await call(`/sponsorships?asOf=${firstInstalmentDue}`, { token: sponsor });

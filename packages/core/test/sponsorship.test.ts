@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { applyRepayments, buildTermLoanSchedule } from '../src/amortisation.js';
 import { defaultCircleConfig, mergeConfig } from '../src/config.js';
 import { createRegister, sharesOf, subscribe } from '../src/shares.js';
 import {
@@ -563,5 +564,120 @@ describe('sponsor cover is released as the loan is repaid', () => {
     // Under the old rule all 5,000,000 stayed locked and this member could
     // back nobody. Four fifths of the loan has come back, so they can.
     assert.equal(pledgeableCapacity(exposure, 100_000), 4_000_000);
+  });
+});
+
+/**
+ * The rule as the members put it: when a borrower pays their 10%, the
+ * collateral moves by what is left *after the interest is deducted*.
+ *
+ * This matters because the instalment and the principal are different
+ * numbers. A member pays TSh 6,125,000 but only TSh 5,000,000 of that
+ * reduces the debt — the rest is the cost of the loan. Releasing collateral
+ * against the gross payment would free more than the borrower has actually
+ * repaid, and leave the circle under-covered.
+ */
+describe('collateral moves with the principal, not the payment', () => {
+  const schedule = buildTermLoanSchedule({
+    principal: 50_000_000,
+    monthlyInterestRate: 0.025,
+    termMonths: 3,
+    minimumMonthlyPrincipalRate: 0.1,
+    disbursedOn: '2026-01-15',
+  });
+
+  const sponsorPledge = pledge({ sponsorId: 'mem_2', amount: 5_000_000, status: 'accepted' });
+
+  const stateAfter = (paymentsSoFar: { paidOn: string; amount: number }[], asOf: string) => {
+    const loanState = applyRepayments(schedule, paymentsSoFar, { asOf });
+    return {
+      allocation: loanState.allocations.at(-1)!,
+      outstanding: loanState.principalOutstanding,
+      atRisk: liveExposure(sponsorPledge, {
+        originalPrincipal: 50_000_000,
+        principalOutstanding: loanState.principalOutstanding,
+        status: 'disbursed',
+      }),
+    };
+  };
+
+  it('separates the interest from the principal in each instalment', () => {
+    const first = schedule.rows[0];
+    assert.equal(first.totalDue, 6_125_000);
+    assert.equal(first.interestDue, 1_125_000);
+    assert.equal(first.principalDue, 5_000_000);
+  });
+
+  it('releases against the 5,000,000, not the 6,125,000 that was paid', () => {
+    const payments = [{ paidOn: '2026-02-15', amount: 6_125_000 }];
+    const after = stateAfter(payments, '2026-02-15');
+
+    assert.equal(after.allocation.towardInterest, 1_125_000);
+    assert.equal(after.allocation.towardPrincipal, 5_000_000);
+    assert.equal(after.outstanding, 45_000_000);
+
+    // A tenth of the debt is gone, so a tenth of the collateral is free.
+    assert.equal(after.atRisk, 4_500_000);
+
+    // Had it released against the gross payment the sponsor would be at
+    // 4,387,500 — more freed than the borrower has actually repaid.
+    assert.notEqual(after.atRisk, Math.ceil(5_000_000 * (1 - 6_125_000 / 50_000_000)));
+  });
+
+  it('steps the collateral down once per instalment, by the same amount', () => {
+    const payments: { paidOn: string; amount: number }[] = [];
+    const atRisk: number[] = [];
+
+    for (const row of schedule.rows.filter((entry) => entry.kind === 'service')) {
+      payments.push({ paidOn: row.dueOn, amount: row.totalDue });
+      atRisk.push(stateAfter(payments, row.dueOn).atRisk);
+    }
+
+    assert.deepEqual(atRisk, [4_500_000, 4_000_000, 3_500_000]);
+  });
+
+  it('frees the collateral entirely when the balloon clears the debt', () => {
+    const payments = schedule.rows.map((row) => ({ paidOn: row.dueOn, amount: row.totalDue }));
+    const after = stateAfter(payments, schedule.maturityOn);
+
+    assert.equal(after.outstanding, 0);
+    assert.equal(after.atRisk, 0);
+  });
+
+  /**
+   * The invariant that makes the whole scheme coherent: cover and debt move
+   * together, so the circle is neither under-covered nor holding collateral
+   * against money that has already come home.
+   */
+  it('keeps total cover equal to what is still owed', () => {
+    // The founding shape: nine sponsors at 5,000,000 plus the borrower's own
+    // 5,000,000 of shares covers the 50,000,000 exactly.
+    const sponsors = Array.from({ length: 9 }, (_, index) =>
+      pledge({ sponsorId: `mem_${index + 2}`, amount: 5_000_000, status: 'accepted' }),
+    );
+
+    const payments: { paidOn: string; amount: number }[] = [];
+
+    for (const row of schedule.rows) {
+      payments.push({ paidOn: row.dueOn, amount: row.totalDue });
+      const loanState = applyRepayments(schedule, payments, { asOf: row.dueOn });
+      const loan = {
+        originalPrincipal: 50_000_000,
+        principalOutstanding: loanState.principalOutstanding,
+        status: 'disbursed',
+      };
+
+      const sponsorCover = sponsors.reduce((total, entry) => total + liveExposure(entry, loan), 0);
+      // The borrower's own stake is released on the same basis.
+      const selfCover = Math.ceil(
+        5_000_000 * (loanState.principalOutstanding / 50_000_000),
+      );
+
+      assert.equal(
+        sponsorCover + selfCover,
+        loanState.principalOutstanding,
+        `cover drifted from the debt after ${row.dueOn}`,
+      );
+    }
   });
 });
