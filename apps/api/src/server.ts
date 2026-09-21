@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { type Role } from './auth.js';
 import { openDb, type Db } from './db.js';
 import { Router } from './http.js';
 import { createStaticHandler } from './static.js';
@@ -17,6 +18,17 @@ import { registerMemberRoutes } from './routes/members.js';
 
 export function buildRouter(db: Db): Router {
   const router = new Router();
+
+  // Authorisation reads the member's current row rather than trusting the
+  // role the token was issued with.
+  const lookup = db.prepare('SELECT role, full_name, status FROM members WHERE id = ?');
+  router.resolvePrincipal = (memberId) => {
+    const row = lookup.get(memberId) as unknown as
+      | { role: Role; full_name: string; status: string }
+      | undefined;
+    return row ? { role: row.role, name: row.full_name, status: row.status } : null;
+  };
+
   registerDashboardRoutes(router, db);
   registerMemberRoutes(router, db);
   registerLoanRoutes(router, db);
@@ -33,7 +45,16 @@ export function createApp(db: Db, options: { staticDir?: string } = {}) {
   }
 
   return createServer((req, res) => {
-    void router.handle(req, res);
+    // Last line of defence. Anything that escapes the router's own handling
+    // becomes a 500, never an unhandled rejection that ends the process —
+    // a circle's server should not be stoppable by one malformed request.
+    router.handle(req, res).catch((error) => {
+      console.error('Unhandled error escaping the router:', error);
+      if (!res.writableEnded) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: { code: 'internal_error', message: 'Request failed' } }));
+      }
+    });
   });
 }
 

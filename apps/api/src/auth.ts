@@ -27,18 +27,42 @@ export interface TokenPayload {
 const SCRYPT_KEYLEN = 64;
 const TOKEN_TTL_SECONDS = 60 * 60 * 12;
 
+/**
+ * Ephemeral key, generated once per process when none is configured.
+ *
+ * There is deliberately no constant fallback. A signing key written into the
+ * source is a published key: anyone who can read the repository can mint a
+ * token claiming any member id and the `chair` role, and every authorisation
+ * check in the system would honour it. Guarding that behind `NODE_ENV` is not
+ * enough, because nothing in the documented way of running this server sets
+ * `NODE_ENV` — the default path would have used the published key.
+ *
+ * Generating a random key instead fails closed. Sessions do not survive a
+ * restart, which is a visible nuisance in development and impossible to
+ * mistake for a working production setup.
+ */
+let ephemeralKey: string | null = null;
+
 function secret(): string {
   const configured = process.env.MAMOGORO_SECRET;
   if (configured && configured.length >= 16) return configured;
 
-  if (process.env.NODE_ENV === 'production') {
+  if (configured && configured.length < 16) {
     throw new Error(
-      'MAMOGORO_SECRET must be set to at least 16 characters in production: tokens signed with a ' +
-        'development key can be forged by anyone who reads this source.',
+      `MAMOGORO_SECRET is only ${configured.length} characters. Use at least 16 — a short key can be ` +
+        'searched offline, and forging one token is enough to take over the circle.',
     );
   }
-  // Development only, and deliberately obvious in a stack trace.
-  return 'mamogoro-development-secret-do-not-use-in-production';
+
+  if (!ephemeralKey) {
+    ephemeralKey = randomBytes(32).toString('hex');
+    console.warn(
+      'MAMOGORO_SECRET is not set. Signing tokens with a random key generated for this process: ' +
+        'everyone will be signed out when it restarts. Set MAMOGORO_SECRET before deploying.',
+    );
+  }
+
+  return ephemeralKey;
 }
 
 export function hashPassword(password: string): string {

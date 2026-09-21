@@ -32,7 +32,17 @@ export function createStaticHandler(root: string) {
   return ({ res, path }: { req: IncomingMessage; res: ServerResponse; path: string }): boolean => {
     if (!existsSync(rootPath)) return false;
 
-    const relative = normalize(decodeURIComponent(path)).replace(/^([/\\])+/, '');
+    // `decodeURIComponent` throws on a malformed escape such as `/%`. That is
+    // a request for a path that cannot exist, not an error worth propagating —
+    // and letting it escape would take the process down.
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(path);
+    } catch {
+      return false;
+    }
+
+    const relative = normalize(decoded).replace(/^([/\\])+/, '');
     let target = resolve(join(rootPath, relative));
 
     // Containment check on the resolved path: a request for `../../etc/passwd`

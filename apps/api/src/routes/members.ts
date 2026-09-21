@@ -226,6 +226,18 @@ export function registerMemberRoutes(router: Router, db: Db): void {
       const password = str(body, 'password');
       const role = enumField<Role>(body, 'role', ['member', 'cashier', 'secretary', 'chair'], 'member');
       const joinedOn = dateField(body, 'joinedOn', today());
+
+      // Enrolment sets the new member's password, so whoever enrols an account
+      // can sign in as it. Letting a secretary enrol a `chair` would therefore
+      // hand them the chair's powers — disbursing loans, calling defaults,
+      // paying out facilities — by way of an account they control. Officers
+      // are appointed by the circle, not created by whoever holds the register.
+      if (role !== 'member' && principal!.role !== 'chair') {
+        throw ApiError.forbidden(
+          `Only the chair may enrol a member as ${role}. Enrol them as an ordinary member; ` +
+            'appointing officers is a decision for the circle.',
+        );
+      }
       const sharesTaken = moneyField(body, 'shares', { optional: true }) || config.shares.minimumMembershipShares;
       const feesPaid = moneyField(body, 'feesPaid', { optional: true });
 

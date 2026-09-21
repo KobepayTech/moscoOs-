@@ -61,9 +61,14 @@ number and the password `mamogoro123`:
 | Borrower (the 50M loan) | Elia Swai | `+255710000822` |
 
 > The seed is demonstration data with a shared password. Delete
-> `data/mamogoro.db` and enrol real members before any circle uses this.
-> Set `MAMOGORO_SECRET` in production — the server refuses to start with the
-> development signing key when `NODE_ENV=production`.
+> `apps/api/data/mamogoro.db` and enrol real members before any circle uses
+> this.
+>
+> **Set `MAMOGORO_SECRET`** (at least 16 characters) before deploying. It
+> signs the session tokens. With it unset the server generates a random key
+> for that process and says so, which means everyone is signed out whenever it
+> restarts — deliberately, so an unconfigured deployment is obvious rather
+> than quietly insecure. There is no default key to fall back on.
 
 ### The member app
 
@@ -183,8 +188,15 @@ database and an HTTP stack.
 
 **Reading is open, recording is not.** Every member can sign into the admin
 panel and see everything. Only the cashier and chair can record money moving;
-only the secretary and chair can enrol members. Deleting is nobody's privilege
-— it goes to a vote.
+only the secretary and chair can enrol members, and only the chair can enrol
+somebody *as* an officer — whoever enrols an account sets its password, so
+that restriction is what stops a secretary appointing themselves. Deleting is
+nobody's privilege: it goes to a vote.
+
+**Authorisation reads the member's current row, not the token.** Roles and
+memberships change, and a token lasts twelve hours. Standing is looked up on
+every request so an officer who has been stood down stops having the power
+immediately rather than when their token expires.
 
 ---
 

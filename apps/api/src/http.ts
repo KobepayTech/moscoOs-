@@ -85,6 +85,21 @@ export class Router {
    */
   fallback: ((ctx: { req: IncomingMessage; res: ServerResponse; path: string }) => boolean) | null = null;
 
+  /**
+   * Look up the caller's *current* role and standing.
+   *
+   * A token states a role, but roles and memberships change. Without this the
+   * token claim would be the authorisation decision, so a member who had been
+   * stood down as cashier — or whose membership had been closed — would keep
+   * acting on it until the token expired, up to twelve hours later.
+   *
+   * Wired to the database by the server; left null the router simply trusts
+   * the token, which is what the unit tests want.
+   */
+  resolvePrincipal:
+    | ((memberId: string) => { role: Role; name: string; status: string } | null)
+    | null = null;
+
   add(method: string, pattern: string, handler: Handler, options: RouteOptions = {}): this {
     this.routes.push({
       method,
@@ -146,16 +161,30 @@ export class Router {
       return;
     }
 
-    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
-    const found = this.match(req.method ?? 'GET', url.pathname);
-
-    if (!found) {
-      if (req.method === 'GET' && this.fallback?.({ req, res, path: url.pathname })) return;
-      send(res, 404, { error: { code: 'not_found', message: `No route for ${req.method} ${url.pathname}` } });
+    // A request line the URL parser rejects — `//` and anything else that
+    // reads as protocol-relative — is a bad request, not a server fault.
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    } catch {
+      send(res, 400, { error: { code: 'bad_request', message: 'Malformed request URL' } });
       return;
     }
 
     try {
+      const found = this.match(req.method ?? 'GET', url.pathname);
+
+      // Routing and the static fallback sit inside the try as well: a
+      // malformed request line must produce a 4xx, never an exception that
+      // escapes and takes the process with it.
+      if (!found) {
+        if (req.method === 'GET' && this.fallback?.({ req, res, path: url.pathname })) return;
+        send(res, 404, {
+          error: { code: 'not_found', message: `No route for ${req.method} ${url.pathname}` },
+        });
+        return;
+      }
+
       let principal: Principal | null = null;
 
       if (!found.route.options.public) {
@@ -165,6 +194,16 @@ export class Router {
         if (!payload) throw ApiError.unauthorized();
 
         principal = { memberId: payload.sub, role: payload.role, name: payload.name };
+
+        if (this.resolvePrincipal) {
+          const current = this.resolvePrincipal(payload.sub);
+          if (!current) throw ApiError.unauthorized('That membership no longer exists');
+          if (current.status === 'exited') {
+            throw ApiError.forbidden('This membership has been closed');
+          }
+          // Standing as it is now, not as it was when the token was issued.
+          principal = { memberId: payload.sub, role: current.role, name: current.name };
+        }
 
         const allowed = found.route.options.roles;
         if (allowed && !allowed.includes(principal.role)) {
