@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+# A second push to the same branch supersedes the first; no point paying for
+# a run whose result nobody will read.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # node:sqlite landed in 22.5. The whole platform depends on it being
+      # present, so the version floor is a real constraint, not a preference.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck the engine
+        run: npx tsc -p packages/core/tsconfig.json --noEmit
+
+      - name: Test
+        run: npm test
+
+      - name: Typecheck the member app
+        working-directory: apps/mobile
+        run: npx tsc --noEmit
+
+      # The seed exercises every write path end to end and asserts the books
+      # balance, so a green seed is a real integration check, not a fixture.
+      - name: Seed a circle and verify the books balance
+        run: npm run seed
