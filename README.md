@@ -1,5 +1,7 @@
 # Mamogoro Circles
 
+[![CI](https://github.com/KobepayTech/moscoOs-/actions/workflows/ci.yml/badge.svg?branch=claude/mamogoro-circles-platform-7k4sfb)](https://github.com/KobepayTech/moscoOs-/actions/workflows/ci.yml)
+
 A circles operating system: a savings-and-lending circle (chama / stokvel) run
 as software, with share capital, member contributions, sponsor-underwritten
 lending, external investor facilities, a public double-entry ledger, and
