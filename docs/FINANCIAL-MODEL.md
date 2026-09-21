@@ -492,6 +492,30 @@ sent*, so a sponsor is never asked to accept something the rules would then
 reject. Capacity is re-checked at the moment of acceptance, excluding the
 pledge being answered.
 
+### Cover is released as the loan is repaid
+
+A sponsor stands behind what can still be lost, and that shrinks with every
+repayment. A pledge is therefore released in proportion to principal repaid:
+
+```
+still at risk = pledge × (principal outstanding ÷ original principal)
+```
+
+On a TSh 50,000,000 loan with nine sponsors at TSh 5,000,000 each, once
+TSh 10,000,000 has come back each sponsor is carrying TSh 4,000,000 rather
+than TSh 5,000,000 — and TSh 9,000,000 of cover across the circle is free
+again.
+
+Holding the whole pledge until settlement would be wrong twice over. It
+overstates what the sponsor is risking for most of the loan's life, and locked
+capacity is capacity that cannot back anybody else — so over-locking quietly
+shrinks how much the circle can lend. The sponsors of a nearly-repaid loan
+should be backing the next one, not sitting idle.
+
+The figure is rounded **up**, so it never claims a sponsor is freer than they
+are. A defaulted loan stays fully locked: that is precisely when cover is
+called. A cancelled application releases everything at once.
+
 ### When a loan defaults
 
 Loss is absorbed in a fixed order:

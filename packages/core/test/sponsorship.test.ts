@@ -7,7 +7,9 @@ import {
   coverageStatus,
   evaluateApproval,
   expirePledges,
+  liveExposure,
   pledgeableCapacity,
+  releasedRatio,
   runDefaultCascade,
   selfCoverFor,
   suggestSponsors,
@@ -462,5 +464,104 @@ describe('self-cover', () => {
     ];
 
     assert.equal(totalPledgedOut(pledges, 'mem_2'), 3_000_000);
+  });
+});
+
+/**
+ * A sponsor stands behind what can still be lost, and that shrinks as the
+ * borrower repays. Holding the whole pledge until settlement overstates their
+ * exposure for most of a loan's life — and locked capacity is capacity that
+ * cannot back anybody else.
+ */
+describe('sponsor cover is released as the loan is repaid', () => {
+  const accepted = pledge({ sponsorId: 'mem_2', amount: 5_000_000, status: 'accepted' });
+
+  const loanAt = (outstanding: number, status = 'disbursed') => ({
+    originalPrincipal: 50_000_000,
+    principalOutstanding: outstanding,
+    status,
+  });
+
+  it('locks the whole pledge before anything is disbursed', () => {
+    assert.equal(liveExposure(accepted, null), 5_000_000);
+  });
+
+  it('locks the whole pledge while none of the loan has come back', () => {
+    assert.equal(liveExposure(accepted, loanAt(50_000_000)), 5_000_000);
+  });
+
+  it('releases in proportion to principal repaid', () => {
+    // Half the loan repaid: half the pledge is free.
+    assert.equal(liveExposure(accepted, loanAt(25_000_000)), 2_500_000);
+
+    // The case from the review: four fifths repaid should not leave the
+    // sponsor fully locked.
+    assert.equal(liveExposure(accepted, loanAt(10_000_000)), 1_000_000);
+  });
+
+  it('releases everything once the loan is settled', () => {
+    assert.equal(liveExposure(accepted, loanAt(0, 'settled')), 0);
+    assert.equal(liveExposure(accepted, loanAt(0)), 0);
+  });
+
+  it('releases everything when the application is cancelled', () => {
+    assert.equal(liveExposure(accepted, loanAt(50_000_000, 'cancelled')), 0);
+  });
+
+  it('keeps a defaulted loan fully locked — that is when cover is called', () => {
+    assert.equal(liveExposure(accepted, loanAt(30_000_000, 'defaulted')), 3_000_000);
+  });
+
+  it('never claims a sponsor is freer than they are', () => {
+    // Rounds up, so a part-shilling of exposure still counts as locked.
+    const odd = pledge({ sponsorId: 'mem_2', amount: 1_000_001, status: 'accepted' });
+    const exposure = liveExposure(odd, { originalPrincipal: 3, principalOutstanding: 1, status: 'disbursed' });
+
+    assert.ok(exposure >= Math.floor(1_000_001 / 3));
+    assert.ok(exposure <= odd.amount);
+  });
+
+  it('commits nothing for a pledge that was declined or withdrawn', () => {
+    for (const status of ['declined', 'withdrawn', 'expired'] as const) {
+      const dead = pledge({ sponsorId: 'mem_2', amount: 5_000_000, status });
+      assert.equal(liveExposure(dead, loanAt(50_000_000)), 0, status);
+    }
+  });
+
+  it('reports how far a sponsor has been released', () => {
+    assert.equal(releasedRatio(accepted, loanAt(50_000_000)), 0);
+    assert.equal(releasedRatio(accepted, loanAt(25_000_000)), 0.5);
+    assert.equal(releasedRatio(accepted, loanAt(0, 'settled')), 1);
+  });
+
+  it('sums a member’s real exposure across several loans', () => {
+    const exposures = [
+      // Fully drawn: all 5,000,000 at risk.
+      { pledge: pledge({ sponsorId: 'mem_2', amount: 5_000_000, status: 'accepted' }), loan: loanAt(50_000_000) },
+      // Nine tenths repaid: only 400,000 of this one is still at risk.
+      { pledge: pledge({ sponsorId: 'mem_2', amount: 4_000_000, status: 'accepted' }), loan: loanAt(5_000_000) },
+      // Settled: nothing.
+      { pledge: pledge({ sponsorId: 'mem_2', amount: 3_000_000, status: 'accepted' }), loan: loanAt(0, 'settled') },
+      // Somebody else's.
+      { pledge: pledge({ sponsorId: 'mem_3', amount: 9_000_000, status: 'accepted' }), loan: loanAt(50_000_000) },
+    ];
+
+    assert.equal(totalPledgedOut(exposures, 'mem_2'), 5_000_000 + 400_000);
+  });
+
+  it('frees capacity that would otherwise sit idle', () => {
+    const exposure = {
+      memberId: 'mem_2',
+      sharesOwned: 50,
+      pledgedOut: totalPledgedOut(
+        [{ pledge: accepted, loan: loanAt(10_000_000) }],
+        'mem_2',
+      ),
+      ownOutstandingPrincipal: 0,
+    };
+
+    // Under the old rule all 5,000,000 stayed locked and this member could
+    // back nobody. Four fifths of the loan has come back, so they can.
+    assert.equal(pledgeableCapacity(exposure, 100_000), 4_000_000);
   });
 });

@@ -21,6 +21,7 @@ import {
   Empty,
   Explain,
   Loading,
+  Meter,
   Pill,
   Row,
   Screen,
@@ -41,6 +42,11 @@ interface PledgeRow {
   loanPrincipal: number;
   loanPurpose: string | null;
   loanStatus: string;
+  /** Still at risk today, after everything the borrower has repaid. */
+  atRisk: number;
+  released: number;
+  releasedRatio: number;
+  principalOutstanding: number | null;
 }
 
 interface Inbox {
@@ -177,29 +183,50 @@ export function SponsorshipsScreen() {
 
       <Card>
         <CardTitle>Everything you have sponsored</CardTitle>
+        <Body muted>
+          What you are carrying falls as each borrower repays — you are released in step with them, not
+          only when the loan finally closes.
+        </Body>
+
         {rest.length === 0 ? (
           <Empty>Nothing yet.</Empty>
         ) : (
-          rest.map((pledge) => (
-            <View
-              key={pledge.id}
-              style={{
-                flexDirection: 'row',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                paddingVertical: spacing.md,
-                gap: spacing.md,
-              }}
-            >
-              <View style={{ flexShrink: 1, gap: 2 }}>
-                <Body>{pledge.borrowerName}</Body>
-                <Caption>
-                  {money(pledge.amount, currency)} · asked {longDate(pledge.requestedOn)}
-                </Caption>
+          rest.map((pledge) => {
+            const carrying = pledge.status === 'accepted' || pledge.status === 'called';
+
+            return (
+              <View key={pledge.id} style={{ paddingVertical: spacing.md, gap: spacing.xs }}>
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: spacing.md,
+                  }}
+                >
+                  <View style={{ flexShrink: 1, gap: 2 }}>
+                    <Body>{pledge.borrowerName}</Body>
+                    <Caption>
+                      pledged {money(pledge.amount, currency)} · asked {longDate(pledge.requestedOn)}
+                    </Caption>
+                  </View>
+                  <Pill tone={STATUS_TONE[pledge.status]}>{pledge.status}</Pill>
+                </View>
+
+                {carrying ? (
+                  <View style={{ marginTop: spacing.xs }}>
+                    <Meter ratio={pledge.releasedRatio} complete={pledge.atRisk === 0} />
+                    <Caption>
+                      {pledge.atRisk === 0
+                        ? 'Fully released — nothing of yours is at risk on this loan.'
+                        : `${money(pledge.atRisk, currency)} still at risk · ` +
+                          `${money(pledge.released, currency)} released as they have repaid`}
+                    </Caption>
+                  </View>
+                ) : null}
               </View>
-              <Pill tone={STATUS_TONE[pledge.status]}>{pledge.status}</Pill>
-            </View>
-          ))
+            );
+          })
         )}
       </Card>
     </Screen>

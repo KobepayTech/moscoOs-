@@ -29,7 +29,9 @@ import {
   evaluateApproval,
   expirePledges,
   formatMoney,
+  liveExposure,
   pledgeableCapacity,
+  releasedRatio,
   repaymentEntry,
   runDefaultCascade,
   settlementQuote,
@@ -51,6 +53,7 @@ import {
   loadConfig,
   loadLoan,
   loadPledges,
+  loadPledgeExposures,
   loadPledgesBySponsor,
   loadRepayments,
   loanPosition,
@@ -120,7 +123,10 @@ function standingOf(db: Db, config: ReturnType<typeof loadConfig>, memberId: str
     activeTermLoans,
     activeShortTermLoans,
     lastShortTermSettledOn: lastShortTerm?.settled_on ?? null,
-    pledgedOut: totalPledgedOut(loadPledgesBySponsor(db, memberId), memberId),
+    // Live exposure, not the sum of what was promised: a member whose
+    // sponsorships have unwound as their borrowers repaid has that capacity
+    // back, and eligibility must see it.
+    pledgedOut: totalPledgedOut(loadPledgeExposures(db, config, memberId, asOf), memberId),
     suspended: member.status === 'suspended',
   };
 }
@@ -505,23 +511,38 @@ export function registerLoanRoutes(router: Router, db: Db): void {
     });
   });
 
-  /** A sponsor's own inbox. */
-  router.get('/sponsorships', ({ principal }) => {
+  /**
+   * A sponsor's own inbox.
+   *
+   * Each pledge reports what is *still* at risk, not what was promised. A
+   * sponsor watching a borrower repay should see their own stake unwinding —
+   * that is the reassurance that makes people willing to sponsor at all.
+   */
+  router.get('/sponsorships', ({ principal, query }) => {
     const config = loadConfig(db);
-    const asOf = today();
-    const pledges = loadPledgesBySponsor(db, principal!.memberId);
+    // Exposure is a position on a date, like everything else here: what a
+    // sponsor carries depends on how much has been repaid by then.
+    const asOf = query.get('asOf') ?? today();
+    const exposures = loadPledgeExposures(db, config, principal!.memberId, asOf);
 
     return {
       capacity: exposureOf(db, config, principal!.memberId, asOf),
-      pledges: pledges.map((pledge) => {
-        const loan = loadLoan(db, pledge.loanId);
-        const borrower = findMember(db, loan.member_id);
+      pledges: exposures.map(({ pledge, loan }) => {
+        const row = loadLoan(db, pledge.loanId);
+        const borrower = findMember(db, row.member_id);
+        const atRisk = liveExposure(pledge, loan);
+
         return {
           ...pledge,
           borrowerName: borrower.full_name,
-          loanPrincipal: loan.principal,
-          loanPurpose: loan.purpose,
-          loanStatus: loan.status,
+          loanPrincipal: row.principal,
+          loanPurpose: row.purpose,
+          loanStatus: row.status,
+          /** Still at risk today, after everything the borrower has repaid. */
+          atRisk,
+          released: pledge.amount - atRisk,
+          releasedRatio: releasedRatio(pledge, loan),
+          principalOutstanding: loan?.principalOutstanding ?? null,
         };
       }),
     };
@@ -777,10 +798,30 @@ export function registerLoanRoutes(router: Router, db: Db): void {
     const asOf = query.get('asOf') ?? today();
     const loan = loadLoan(db, params.id);
 
-    const pledges = loadPledges(db, loan.id).map((pledge) => ({
-      ...pledge,
-      sponsorName: findMember(db, pledge.sponsorId).full_name,
-    }));
+    // Exposure needs the loan's position, so every sponsor row can show what
+    // is still at risk rather than only what was promised.
+    const position = loan.disbursed_on ? loanPosition(db, config, loan, asOf) : null;
+    const loanState = position
+      ? {
+          originalPrincipal: loan.principal,
+          principalOutstanding:
+            position.product === 'term'
+              ? position.state.principalOutstanding
+              : position.state.outstanding,
+          status: loan.status,
+        }
+      : null;
+
+    const pledges = loadPledges(db, loan.id).map((pledge) => {
+      const atRisk = liveExposure(pledge, loanState);
+      return {
+        ...pledge,
+        sponsorName: findMember(db, pledge.sponsorId).full_name,
+        atRisk,
+        released: pledge.amount - atRisk,
+        releasedRatio: releasedRatio(pledge, loanState),
+      };
+    });
 
     return {
       ...loanSummary(db, config, loan, asOf),

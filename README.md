@@ -19,10 +19,10 @@ circle actually lends out. Every member can read every entry in the books.
 ```
 packages/core     The domain engine. Pure TypeScript, no I/O, no dependencies.
                   Money, shares, interest, amortisation, the facility waterfall,
-                  sponsorship, governance and the ledger.     173 tests
+                  sponsorship, governance, payments and the ledger.  203 tests
 
 apps/api          REST API. Node's built-in HTTP and node:sqlite — no native
-                  build, no database server, no framework.    44 tests
+                  build, no database server, no framework.    87 tests
 
 apps/admin        The admin panel every member can sign into. Plain ES modules,
                   no build step. Served by the API.
@@ -33,7 +33,7 @@ docs/             FINANCIAL-MODEL.md — every rule, worked through.
                   API.md — the endpoints.
 ```
 
-**217 tests, all passing.** The financial rules are proved against the worked
+**290 tests, all passing.** The financial rules are proved against the worked
 examples the circle agreed, not against whatever the code happens to do.
 
 ---
@@ -44,7 +44,7 @@ Requires Node 22.5 or later (for `node:sqlite`). Nothing else.
 
 ```bash
 npm install
-npm test                  # 217 tests across core and api
+npm test                  # 290 tests across core and api
 npm run seed              # a circle with eight months of history
 npm run dev:api           # http://localhost:4000
 ```
@@ -152,6 +152,24 @@ cashier is simply told to pay it out.
 On default the loss is absorbed in a fixed order: the borrower's own shares
 first, then the sponsors' pro rata to what they pledged, then personal
 receivables, and only what no pledge reached is written off against the circle.
+
+Cover is released as the loan is repaid, not held until it closes. Once
+TSh 10,000,000 of a TSh 50,000,000 loan has come back, each of its nine
+sponsors carries TSh 4,000,000 rather than TSh 5,000,000 — freeing
+TSh 9,000,000 of capacity to back the next borrower.
+
+### Before a request reaches anyone, the fee is paid
+
+A borrower pays a fixed **TSh 50,000** for their request to be circulated to
+sponsors. KobeTech collects it over USSD, keeps 5%, and remits TSh 47,500 to
+the circle — and only that net ever touches the books, because the circle never
+held the rest. It is a liability until the loan is decided and becomes income
+only on approval; if the loan does not go ahead, the net is refunded.
+
+Each member also pays KobeTech a monthly subscription to use the platform.
+That is the operator's revenue and never appears in the circle's ledger. If it
+lapses, borrowing and sponsoring are withheld — but never reading, repaying or
+voting.
 
 ### Deletion is by vote — except the books
 

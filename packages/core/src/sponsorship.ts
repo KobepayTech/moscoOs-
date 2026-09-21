@@ -441,10 +441,91 @@ export function suggestSponsors(
   return suggestions;
 }
 
-/** Total a member currently has committed across live sponsorships. */
-export function totalPledgedOut(pledges: readonly Pledge[], sponsorId: string): Money {
+/**
+ * The loan a pledge stands behind, as far as exposure is concerned.
+ *
+ * `null` for a loan that has not been disbursed: nothing has been lent, but
+ * the whole pledge is committed and must not be counted as free.
+ */
+export interface PledgedLoanState {
+  originalPrincipal: Money;
+  principalOutstanding: Money;
+  status: string;
+}
+
+export interface PledgeExposure {
+  pledge: Pledge;
+  loan: PledgedLoanState | null;
+}
+
+/** Loan states in which a sponsor is carrying nothing. */
+const RELEASED_STATES = new Set(['settled', 'cancelled', 'declined']);
+
+/**
+ * How much of a pledge is still genuinely at risk.
+ *
+ * A sponsor stands behind a share of what could still be lost, and what could
+ * be lost shrinks as the borrower repays. Holding the whole pledge locked
+ * until the loan finally settles would overstate the sponsor's exposure for
+ * most of the loan's life: after four fifths of a loan has come back, only a
+ * fifth of it can go wrong.
+ *
+ * That is not merely unfair bookkeeping. Locked capacity is capacity that
+ * cannot back anyone else, so over-locking quietly shrinks how much the
+ * circle can lend — the sponsors of a nearly-repaid loan sit idle when they
+ * could be backing the next one.
+ *
+ * Released in proportion to principal repaid, and rounded *up*, so the figure
+ * never claims a sponsor is freer than they are.
+ */
+export function liveExposure(pledge: Pledge, loan: PledgedLoanState | null): Money {
+  // Only accepted and pending pledges commit anything at all.
+  if (pledge.status !== 'accepted' && pledge.status !== 'pending') return 0;
+
+  // Committed but not yet lent: the whole pledge is spoken for.
+  if (!loan) return pledge.amount;
+
+  if (RELEASED_STATES.has(loan.status)) return 0;
+  if (loan.originalPrincipal <= 0) return 0;
+
+  const outstandingRatio = loan.principalOutstanding / loan.originalPrincipal;
+  if (outstandingRatio <= 0) return 0;
+  if (outstandingRatio >= 1) return pledge.amount;
+
+  return Math.min(pledge.amount, Math.ceil(pledge.amount * outstandingRatio));
+}
+
+/** What a sponsor has been released from, as a fraction of what they pledged. */
+export function releasedRatio(pledge: Pledge, loan: PledgedLoanState | null): number {
+  if (pledge.amount <= 0) return 1;
+  return 1 - liveExposure(pledge, loan) / pledge.amount;
+}
+
+/**
+ * Total a member currently has at risk across their live sponsorships.
+ *
+ * Pass `exposures` to have repayment taken into account. The plain
+ * `Pledge[]` form treats every live pledge as fully committed, which is the
+ * right answer only before anything has been disbursed.
+ */
+export function totalPledgedOut(
+  pledges: readonly Pledge[] | readonly PledgeExposure[],
+  sponsorId: string,
+): Money {
+  if (pledges.length === 0) return 0;
+
+  const withLoans = 'pledge' in (pledges[0] as object);
+
+  if (withLoans) {
+    return sum(
+      (pledges as readonly PledgeExposure[])
+        .filter((entry) => entry.pledge.sponsorId === sponsorId)
+        .map((entry) => liveExposure(entry.pledge, entry.loan)),
+    );
+  }
+
   return sum(
-    pledges
+    (pledges as readonly Pledge[])
       .filter(
         (pledge) =>
           pledge.sponsorId === sponsorId && (pledge.status === 'accepted' || pledge.status === 'pending'),

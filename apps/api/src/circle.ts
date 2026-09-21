@@ -20,6 +20,7 @@ import {
   type Money,
   type Pledge,
   type ShareRegister,
+  type PledgeExposure,
   type ShortTermLoan,
   type SponsorshipRequest,
   type TermLoanSchedule,
@@ -538,6 +539,43 @@ export function loadPledgesBySponsor(db: Db, sponsorId: string): Pledge[] {
   return rows.map(toPledge);
 }
 
+/**
+ * A member's pledges paired with the state of the loans behind them.
+ *
+ * Needed because a sponsor's real exposure shrinks as the borrower repays:
+ * without the loan state, cover stays locked long after the risk it covers
+ * has gone.
+ */
+export function loadPledgeExposures(
+  db: Db,
+  config: CircleConfig,
+  sponsorId: string,
+  asOf = today(),
+): PledgeExposure[] {
+  return loadPledgesBySponsor(db, sponsorId).map((pledge) => {
+    const row = db.prepare('SELECT * FROM loans WHERE id = ?').get(pledge.loanId) as unknown as
+      | LoanRow
+      | undefined;
+
+    // Not yet disbursed: the pledge is committed but nothing is outstanding,
+    // so the whole amount stays locked.
+    if (!row || !row.disbursed_on) {
+      return { pledge, loan: null };
+    }
+
+    const position = loanPosition(db, config, row, asOf);
+    const principalOutstanding =
+      position.product === 'term'
+        ? position.state.principalOutstanding
+        : position.state.outstanding;
+
+    return {
+      pledge,
+      loan: { originalPrincipal: row.principal, principalOutstanding, status: row.status },
+    };
+  });
+}
+
 export function sponsorshipRequestFor(db: Db, loan: LoanRow): SponsorshipRequest {
   return {
     loanId: loan.id,
@@ -552,7 +590,7 @@ export function sponsorshipRequestFor(db: Db, loan: LoanRow): SponsorshipRequest
 /** Cover a borrower brings from their own uncommitted shares. */
 export function selfCoverForMember(db: Db, config: CircleConfig, memberId: string, asOf = today()): Money {
   const register = buildRegister(db, config, asOf);
-  const pledgedOut = totalPledgedOut(loadPledgesBySponsor(db, memberId), memberId);
+  const pledgedOut = totalPledgedOut(loadPledgeExposures(db, config, memberId, asOf), memberId);
   const owed = memberOutstandingPrincipal(db, config, memberId, asOf);
   return selfCoverFor(config, register, memberId, pledgedOut, owed);
 }
@@ -573,14 +611,14 @@ export function exposureOf(
   options: { excludePledgeId?: string } = {},
 ) {
   const register = buildRegister(db, config, asOf);
-  const pledges = loadPledgesBySponsor(db, memberId).filter(
-    (pledge) => pledge.id !== options.excludePledgeId,
+  const exposures = loadPledgeExposures(db, config, memberId, asOf).filter(
+    (entry) => entry.pledge.id !== options.excludePledgeId,
   );
 
   return {
     memberId,
     sharesOwned: sharesOf(register, memberId),
-    pledgedOut: totalPledgedOut(pledges, memberId),
+    pledgedOut: totalPledgedOut(exposures, memberId),
     ownOutstandingPrincipal: memberOutstandingPrincipal(db, config, memberId, asOf),
   };
 }

@@ -470,6 +470,58 @@ describe('a loan from application to repayment', () => {
     assert.equal(recorded.towardPenalty, 0, 'paid on the day it fell due, so no penalty');
   });
 
+  /**
+   * Sponsors should watch their own stake unwind as the borrower repays.
+   * Holding it all until settlement would overstate their risk for most of
+   * the loan, and lock capacity that could be backing somebody else.
+   */
+  it('releases the sponsors in step with the repayment', async () => {
+    const sponsor = await signIn(phoneOf(18)); // pledged 4,000,000
+    // As at the day the first instalment was paid — exposure is a position on
+    // a date, and the instalment falls a month after disbursement.
+    const { body } = await call(`/sponsorships?asOf=${firstInstalmentDue}`, { token: sponsor });
+
+    const pledge = (
+      body!.pledges as never as {
+        loanId: string;
+        amount: number;
+        atRisk: number;
+        released: number;
+        releasedRatio: number;
+      }[]
+    ).find((entry) => entry.loanId === loanId)!;
+
+    assert.ok(pledge, 'expected the sponsor to be carrying this loan');
+    assert.equal(pledge.amount, 4_000_000);
+
+    // One instalment has repaid 1,000,000 of a 10,000,000 loan, so a tenth
+    // of the pledge is free again.
+    assert.equal(pledge.atRisk, 3_600_000);
+    assert.equal(pledge.released, 400_000);
+    assert.ok(Math.abs(pledge.releasedRatio - 0.1) < 1e-9);
+  });
+
+  it('gives that released capacity back for sponsoring someone else', async () => {
+    const sponsor = await signIn(phoneOf(18));
+    const { body } = await call(`/sponsorships?asOf=${firstInstalmentDue}`, { token: sponsor });
+    const capacity = body!.capacity as never as { pledgedOut: number };
+
+    // Under the old rule this read 4,000,000 until the loan finally settled.
+    assert.equal(capacity.pledgedOut, 3_600_000);
+  });
+
+  it('still shows the full pledge at risk before anything has been repaid', async () => {
+    const sponsor = await signIn(phoneOf(18));
+    const { body } = await call(`/sponsorships?asOf=${disbursedOn}`, { token: sponsor });
+
+    const pledge = (body!.pledges as never as { loanId: string; atRisk: number }[]).find(
+      (entry) => entry.loanId === loanId,
+    )!;
+
+    // Release tracks repayment, so on the day of disbursement nothing is free.
+    assert.equal(pledge.atRisk, 4_000_000);
+  });
+
   it('charges only the interest the borrower actually used when settling early', async () => {
     const asOf = addDays(firstInstalmentDue, 10);
     const { body } = await call(`/loans/${loanId}/settlement?asOf=${asOf}`, { token: borrowerToken });

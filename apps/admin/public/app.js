@@ -802,6 +802,7 @@ function renderLoanDetail(target) {
                 <p class="card-note">
                   Every member can see this. If the loan defaults, these shareholdings are called in the order
                   shown: the borrower's own shares first, then the sponsors', pro rata to what they pledged.
+                  A sponsor is released in step with the repayments, so "at risk" falls as the borrower pays.
                 </p>
                 <div class="table-wrap">
                   <table>
@@ -809,6 +810,7 @@ function renderLoanDetail(target) {
                       <tr>
                         <th>Sponsor</th>
                         <th class="num">Pledged</th>
+                        <th class="num">Still at risk</th>
                         <th>Answer</th>
                         <th>Asked</th>
                       </tr>
@@ -820,6 +822,13 @@ function renderLoanDetail(target) {
                             <tr>
                               <td>${esc(pledge.sponsorName)}</td>
                               <td class="num">${money(pledge.amount)}</td>
+                              <td class="num">
+                                ${pledge.atRisk === undefined
+                                  ? '—'
+                                  : pledge.atRisk === 0
+                                    ? '<span class="pill pill-positive">released</span>'
+                                    : money(pledge.atRisk)}
+                              </td>
                               <td>
                                 <span
                                   class="pill pill-${pledge.status === 'accepted'
