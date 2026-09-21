@@ -49,6 +49,14 @@ import {
   type CollateralCommitment,
   type LoanSnapshot,
   type PendingRequest,
+  type ApprovalAssessment,
+  type ApprovalInputs,
+  type EligibilityResult,
+  type ExceptionAuthorisation,
+  type MemberStanding,
+  type SponsorCapacity,
+  authorisationIsCurrent,
+  pledgeableCapacity,
 } from '@mamogoro/core';
 
 import { type Db, newId, nowISO } from './db.js';
@@ -864,4 +872,159 @@ export function audit(
     input.detail ? JSON.stringify(input.detail) : null,
     nowISO(),
   );
+}
+
+// ---------------------------------------------------------------------------
+// The approval gate
+// ---------------------------------------------------------------------------
+
+/**
+ * Exceptions a person has authorised against this loan, still in date.
+ *
+ * Stale grants are dropped here rather than filtered by the caller, so there
+ * is no path where an expired authorisation reaches the gate.
+ */
+export function loadAuthorisations(
+  db: Db,
+  config: CircleConfig,
+  loanId: string,
+  asOf = today(),
+): ExceptionAuthorisation[] {
+  const rows = db
+    .prepare('SELECT * FROM loan_authorisations WHERE loan_id = ? AND revoked_on IS NULL')
+    .all(loanId) as unknown as {
+    gate: string;
+    authorised_by: string;
+    authorised_on: string;
+    reason: string;
+  }[];
+
+  return rows
+    .map((row) => ({
+      gate: row.gate as ExceptionAuthorisation['gate'],
+      authorisedBy: row.authorised_by,
+      authorisedOn: row.authorised_on,
+      reason: row.reason,
+    }))
+    .filter((grant) => authorisationIsCurrent(config, grant, asOf));
+}
+
+/** Principal already approved and waiting to be paid out. */
+export function committedToApprovedLoans(db: Db, excludeLoanId?: string): Money {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(principal), 0) AS total FROM loans
+        WHERE status IN ('approved','awaiting_capital') AND id IS NOT ?`,
+    )
+    .get(excludeLoanId ?? '') as unknown as { total: number };
+  return row.total;
+}
+
+/**
+ * Assemble everything the approval gate needs to judge one loan.
+ *
+ * The gate is pure, so every fact it weighs is gathered here — which also
+ * means the inputs recorded alongside a decision are enough to reproduce it
+ * exactly.
+ */
+export function approvalInputsFor(
+  db: Db,
+  config: CircleConfig,
+  loan: LoanRow,
+  standing: MemberStanding,
+  eligibility: EligibilityResult,
+  options: { subscriptionAllowsBorrowing: boolean; asOf?: string },
+): ApprovalInputs {
+  const asOf = options.asOf ?? today();
+  const borrower = db.prepare('SELECT status FROM members WHERE id = ?').get(loan.member_id) as unknown as
+    | { status: string }
+    | undefined;
+
+  const request = sponsorshipRequestFor(db, loan);
+  const selfCover = selfCoverForMember(db, config, loan.member_id, asOf);
+
+  // Each accepted sponsor's remaining capacity, ignoring their pledge to this
+  // loan: the question is whether the shares they promised are still free.
+  const sponsorCover: SponsorCapacity[] = loadPledges(db, loan.id)
+    .filter((pledge) => pledge.status === 'accepted')
+    .map((pledge) => ({
+      sponsorId: pledge.sponsorId,
+      pledged: pledge.amount,
+      available: pledgeableCapacity(
+        exposureOf(db, config, pledge.sponsorId, asOf, { excludePledgeId: pledge.id }),
+        config.shares.parValue,
+      ),
+    }));
+
+  const space = headroom(db, config, asOf);
+
+  return {
+    loanId: loan.id,
+    borrowerId: loan.member_id,
+    principal: loan.principal,
+    asOf,
+    coverage: coverageStatus(request, { selfCover, asOf }),
+    sponsorCover,
+    selfCover,
+    eligibility,
+    borrowerActive: borrower?.status === 'active',
+    subscriptionAllowsBorrowing: options.subscriptionAllowsBorrowing,
+    loansInArrears: standing.loansInArrears,
+    cashOnHand: cashPosition(buildBook(db, asOf), asOf),
+    policyAvailable: space.available,
+    committedToOtherLoans: committedToApprovedLoans(db, loan.id),
+    borrowerOutstanding: memberOutstandingPrincipal(db, config, loan.member_id, asOf),
+    bookOutstanding: totalDeployed(db, asOf),
+    authorisations: loadAuthorisations(db, config, loan.id, asOf),
+  };
+}
+
+/**
+ * Write the decision down.
+ *
+ * Kept whether the loan was approved or refused. A member turned away by a
+ * rule is owed the same explanation as one let through by it, and a decision
+ * that cannot be reconstructed afterwards is indistinguishable from someone's
+ * opinion on the day.
+ */
+export function recordDecision(db: Db, loanId: string, assessment: ApprovalAssessment): void {
+  db.prepare(
+    `INSERT INTO loan_decisions
+       (id, loan_id, outcome, headline, checks_json, policy_version, assessed_on, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    newId('dec'),
+    loanId,
+    assessment.outcome,
+    assessment.headline,
+    JSON.stringify(assessment.checks),
+    assessment.policyVersion,
+    assessment.assessedOn,
+    nowISO(),
+  );
+}
+
+/** The most recent decision on a loan, as it was made. */
+export function latestDecision(db: Db, loanId: string) {
+  const row = db
+    .prepare('SELECT * FROM loan_decisions WHERE loan_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1')
+    .get(loanId) as unknown as
+    | {
+        outcome: string;
+        headline: string;
+        checks_json: string;
+        policy_version: string;
+        assessed_on: string;
+      }
+    | undefined;
+
+  if (!row) return null;
+
+  return {
+    outcome: row.outcome,
+    headline: row.headline,
+    checks: JSON.parse(row.checks_json),
+    policyVersion: row.policy_version,
+    assessedOn: row.assessed_on,
+  };
 }

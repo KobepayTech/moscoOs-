@@ -910,3 +910,117 @@ Every member can read every other member's statement, for the same reason
 every member can read the ledger: a circle where you can only see your own
 account is a circle where you have to take it on trust that everyone else's
 adds up.
+
+---
+
+## 12. The approval gate
+
+**Implemented in** `packages/core/src/approval.ts` · **proved in**
+`test/approval.test.ts` and `apps/api/test/approval.test.ts`
+
+Section 6 establishes that a loan approves itself once the members have
+covered it. That rule stands. Asking a committee to re-take a decision the
+members have already taken with their own capital is bureaucracy, not control.
+
+But **full cover is not sufficient**, and treating it as sufficient is the
+opposite mistake. Cover can be complete while:
+
+- the circle has no cash to pay with;
+- the borrower is three contributions behind, or already in arrears;
+- a sponsor's shares, genuinely free when they pledged in March, have since
+  been committed to somebody else;
+- the loan would put more than a quarter of the book in one pair of hands.
+
+None of those are decisions. They are facts, and a machine checks facts better
+and faster than a meeting does.
+
+### Eight gates
+
+| Gate | Passes when | Exceptionable |
+|---|---|---|
+| `cover` | Accepted pledges plus self-cover meet the required ratio | No |
+| `cover_live` | Each sponsor's shares are *still* free, pledge by pledge | No |
+| `borrower_standing` | Member active, and the eligibility engine has nothing blocking | No |
+| `subscription` | The platform subscription permits borrowing | No |
+| `arrears` | No existing loan behind | No |
+| `within_ceiling` | Principal within what policy allows this member | **Yes** |
+| `concentration` | Borrower's share of the book *after* this loan is within the limit | **Yes** |
+| `spendable_cash` | Cash, less the reserve and less loans already approved, covers it | No |
+
+`cover_live` is the one that could not be done on paper. A pledge records what
+somebody promised; it says nothing about whether they can still honour it. The
+gate re-derives each sponsor's remaining capacity excluding this pledge and
+takes the lesser of what they promised and what is genuinely free — so a
+sponsor who pledged 5,000,000 and has since backed two other members counts for
+what they actually have, and the borrower is told which sponsors to go back to.
+
+`concentration` is measured on the book **as it would be** after the loan, not
+as it is. That is the book the circle would actually be carrying.
+
+`spendable_cash` subtracts two things people forget: a configurable reserve the
+circle will not lend below, and principal already promised to approved loans
+waiting to be paid. Approving a loan against money already spoken for makes the
+approval a promise rather than a decision.
+
+### What follows from a failure
+
+| Outcome | When | Where it goes |
+|---|---|---|
+| `approved` | Every gate passes | Straight to the cashier |
+| `awaiting_sponsors` | Cover incomplete | Still with the members |
+| `awaiting_capital` | Everything but the money | The funding queue |
+| `needs_authorisation` | Only a policy number is in the way | One named authoriser |
+| `refused` | A gate no exception can clear | Back to the borrower, with the reason |
+
+Cash failure is a queue, not a refusal: "we will, when we can" is the true
+answer and it keeps the request alive. Order matters — cover first, because
+until the members have decided nothing else is worth saying.
+
+### Exceptions, not approvals
+
+Two gates, and only two, may be authorised past. Both are the same shape: the
+rule is a figure the members chose, and the request in front of you is outside
+it. A member asking for 80,000,000 against a 50,000,000 ceiling is not
+ineligible; they are exceptional, and exceptional cases are what people are
+for.
+
+So an over-ceiling request is **accepted at application**, told plainly that it
+will need authorisation, and allowed to gather sponsors like any other. Only
+when it is fully covered does it go to one person — not a committee, and not
+every loan. Refusing it at the door would have meant there was no exception to
+handle.
+
+One ceiling is never exceptional: the capital the circle actually has. That is
+the same fact as `spendable_cash`, and nobody may authorise money into
+existence. It is tested against the capital directly rather than against which
+ceiling happens to bind lowest.
+
+An authorisation:
+
+- is granted against a named gate, never "the loan";
+- carries a reason of at least ten characters, and the granter's name;
+- expires after `approval.authorisationValidDays`, so it cannot quietly become
+  a standing permission;
+- cannot be granted by the borrower for their own loan;
+- **re-runs the whole gate afterwards** — clearing one rule is not approving a
+  loan, and if something else has failed meanwhile it still does not go through;
+- is announced to the circle. An exception nobody knows about is not an
+  exception, it is a private arrangement.
+
+### Every decision explains itself
+
+The full gate list, the figures measured, and the policy version in force are
+written to `loan_decisions` on every assessment — approved or refused. A
+borrower can read exactly which line stopped them and what the number would
+have to be. A member auditing the books in a year can see which rules were in
+force when a loan was approved, rather than re-deriving it against today's.
+
+This is the part that makes automation defensible. "The system said no" is a
+worse answer than a committee's, because at least a committee can be asked why.
+
+### Where the cashier fits
+
+Nowhere, as an approver. The cashier does not decide anything: by the time a
+loan reaches them the rules and the members have settled it, and their job is
+to hand over the money and record that they did. Making them a second gate
+would recreate the bottleneck the design removes.

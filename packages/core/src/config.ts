@@ -197,6 +197,62 @@ export interface PlatformConfig {
   settlementProvider: string;
 }
 
+/**
+ * What must be true before a loan approves itself.
+ *
+ * Sponsorship is the members' decision and the engine does not second-guess
+ * it. But cover alone is not enough: cover can be real and the circle still
+ * have no cash, or the loan still breach a limit the members themselves set.
+ * These are the checks that run between "fully covered" and "approved", so
+ * that removing the committee removes bureaucracy rather than control.
+ */
+export interface ApprovalConfig {
+  /**
+   * Stamped on every decision, so a loan approved last year can be read
+   * against the rules that actually approved it.
+   *
+   * Bump this whenever a rule below changes.
+   */
+  policyVersion: string;
+  /**
+   * Cash the circle will not lend below, whatever policy says is available.
+   *
+   * A circle that lends its last shilling cannot pay a withdrawal, a refund
+   * or its own running costs.
+   */
+  minimumCashReserve: Money;
+  /**
+   * Refuse to approve when the money is not actually in the account.
+   *
+   * On by default. Approving a loan the circle cannot pay makes the approval
+   * a promise rather than a decision.
+   */
+  requireSpendableCash: boolean;
+  /**
+   * Gates a human may authorise an exception to.
+   *
+   * Deliberately short. A gate that anybody can wave through is not a gate,
+   * and the two here are both "the rule is a policy number, and this case is
+   * outside it" rather than "the money or the cover is not there".
+   */
+  exceptionableGates: readonly ApprovalGateCode[];
+  /** Roles that may authorise an exception. */
+  exceptionAuthorisers: readonly string[];
+  /** Days an authorisation stays good before the request must be re-assessed. */
+  authorisationValidDays: number;
+}
+
+/** Every check that stands between full cover and an approved loan. */
+export type ApprovalGateCode =
+  | 'cover'
+  | 'cover_live'
+  | 'borrower_standing'
+  | 'subscription'
+  | 'arrears'
+  | 'within_ceiling'
+  | 'concentration'
+  | 'spendable_cash';
+
 export interface CircleConfig {
   circleName: string;
   currency: string;
@@ -206,6 +262,7 @@ export interface CircleConfig {
   membership: MembershipConfig;
   applicationFee: ApplicationFeeConfig;
   platform: PlatformConfig;
+  approval: ApprovalConfig;
   termLoan: TermLoanConfig;
   shortTermLoan: ShortTermLoanConfig;
   sponsorship: SponsorshipConfig;
@@ -263,6 +320,17 @@ export function defaultCircleConfig(): CircleConfig {
       subscriptionGraceDays: 7,
       subscriptionProvider: 'palmpesa',
       settlementProvider: 'kobepay',
+    },
+
+    approval: {
+      policyVersion: '2026.09',
+      minimumCashReserve: 20_000_000,
+      requireSpendableCash: true,
+      // Both of these are "your policy number says 50m and this is 80m".
+      // Cover, arrears, standing and cash are never waved through.
+      exceptionableGates: ['within_ceiling', 'concentration'],
+      exceptionAuthorisers: ['chair'],
+      authorisationValidDays: 14,
     },
 
     termLoan: {

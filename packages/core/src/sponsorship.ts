@@ -546,3 +546,124 @@ export function selfCoverFor(
   const shareValue = holdingValue(register, borrowerId);
   return nonNegative(shareValue - pledgedOut - ownOutstandingPrincipal);
 }
+
+// ---------------------------------------------------------------------------
+// Buying out of a pledge
+// ---------------------------------------------------------------------------
+
+/**
+ * A sponsor cannot simply ask to be released.
+ *
+ * Cover comes back to a sponsor in exactly one way as a matter of course: the
+ * borrower repays, and the release rule above hands it back in proportion.
+ * There is no other route, and there must not be. A guarantee somebody can
+ * walk out of when it starts to look risky is not a guarantee — it is a
+ * promise that holds only while it costs nothing, which is precisely when the
+ * borrower does not need it.
+ *
+ * So a sponsor who wants their capacity back before the loan runs its course
+ * has one option: **pay the cover they are carrying**. The money stands in
+ * place of their shares. Their holding is freed; the circle's position is
+ * untouched, because what secured the loan is still there, in cash rather
+ * than in share value.
+ *
+ * What it does *not* do is touch the borrower. The loan is unchanged, its
+ * schedule is unchanged, and the borrower owes the circle exactly what they
+ * owed before — because the sponsor's exit is between the sponsor and the
+ * circle, and a borrower whose debt moved because somebody else lost their
+ * nerve would be a borrower who cannot rely on their own schedule.
+ *
+ * The cash is then released back to the sponsor on the same proportional rule
+ * as the shares would have been, and is taken first in a default cascade.
+ */
+export interface BuyoutQuote {
+  pledgeId: string;
+  sponsorId: string;
+  loanId: string;
+  /** What they promised. */
+  pledged: Money;
+  /** What they are still carrying, after repayments. This is the price. */
+  liveExposure: Money;
+  /** Already released by the borrower's repayments, and so not payable. */
+  alreadyReleased: Money;
+  /** Whether a buy-out is possible at all. */
+  available: boolean;
+  reason: string;
+}
+
+/**
+ * What it would cost this sponsor to be released today.
+ *
+ * The price is their *live* exposure, not what they originally pledged: the
+ * part the borrower has already repaid was released to them free, and charging
+ * for it again would be charging twice for the same cover.
+ */
+export function buyoutQuote(
+  pledge: Pledge,
+  loan: PledgedLoanState | null,
+  options: { loanDisbursed: boolean },
+): BuyoutQuote {
+  const live = liveExposure(pledge, loan);
+  const base = {
+    pledgeId: pledge.id,
+    sponsorId: pledge.sponsorId,
+    loanId: pledge.loanId,
+    pledged: pledge.amount,
+    liveExposure: live,
+    alreadyReleased: nonNegative(pledge.amount - live),
+  };
+
+  if (pledge.status !== 'accepted') {
+    return {
+      ...base,
+      available: false,
+      reason:
+        pledge.status === 'pending'
+          ? 'You have not answered this request yet — decline it instead, which costs nothing.'
+          : `This pledge is ${pledge.status}; there is nothing to be released from.`,
+    };
+  }
+
+  // Before the money has gone out there is nothing to secure, so a sponsor
+  // may withdraw without paying. Once it has, they are carrying real risk.
+  if (!options.loanDisbursed) {
+    return {
+      ...base,
+      available: false,
+      reason:
+        'This loan has not been disbursed. Withdraw the pledge instead — no money is at risk yet, so ' +
+        'there is nothing to pay.',
+    };
+  }
+
+  if (live <= 0) {
+    return {
+      ...base,
+      available: false,
+      reason: 'The borrower has repaid enough that you are carrying nothing. Your cover is already free.',
+    };
+  }
+
+  return {
+    ...base,
+    available: true,
+    reason:
+      `Paying ${live} releases the shares you have locked against this loan. The money stands in their ` +
+      'place and comes back to you as the borrower repays, exactly as the shares would have.',
+  };
+}
+
+/**
+ * Cover standing behind a loan once buy-outs are counted.
+ *
+ * Cash paid by a sponsor who bought out secures the loan just as their shares
+ * did, so it counts. The circle's invariant — total cover equals principal
+ * outstanding — holds across a buy-out precisely because nothing left.
+ */
+export function coverWithBuyouts(
+  pledges: readonly PledgeExposure[],
+  sponsorId: string,
+  cashCollateral: Money,
+): Money {
+  return totalPledgedOut(pledges, sponsorId) + cashCollateral;
+}

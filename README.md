@@ -19,11 +19,11 @@ circle actually lends out. Every member can read every entry in the books.
 ```
 packages/core     The domain engine. Pure TypeScript, no I/O, no dependencies.
                   Money, shares, interest, amortisation, the facility waterfall,
-                  sponsorship, governance, payments, capital, statements and the
-                  ledger.                                     259 tests
+                  sponsorship, governance, payments, capital, statements, the
+                  approval gate and the ledger.               290 tests
 
 apps/api          REST API. Node's built-in HTTP and node:sqlite — no native
-                  build, no database server, no framework.   109 tests
+                  build, no database server, no framework.   121 tests
 
 apps/admin        The admin panel every member can sign into. Plain ES modules,
                   no build step. Served by the API. One module per workspace
@@ -35,7 +35,7 @@ docs/             FINANCIAL-MODEL.md — every rule, worked through.
                   API.md — the endpoints.
 ```
 
-**368 tests, all passing.** The financial rules are proved against the worked
+**411 tests, all passing.** The financial rules are proved against the worked
 examples the circle agreed, not against whatever the code happens to do.
 
 ---
@@ -46,7 +46,7 @@ Requires Node 22.5 or later (for `node:sqlite`). Nothing else.
 
 ```bash
 npm install
-npm test                  # 368 tests across core and api
+npm test                  # 411 tests across core and api
 npm run seed              # a circle with eight months of history
 npm run dev:api           # http://localhost:4000
 ```
@@ -151,6 +151,51 @@ one's shares are on the line if it defaults. When the pledges cover the loan,
 **it approves itself** — there is no committee decision left to make, and the
 cashier is simply told to pay it out.
 
+### But cover alone never approves a loan
+
+Removing the committee removes the meeting, not the control. Between "fully
+covered" and "approved" sit eight automatic checks, and a loan that fails any
+of them does not go through however well sponsored it is:
+
+| Gate | What it catches |
+|---|---|
+| Sponsor cover | The members have not finished deciding |
+| Cover still live | Shares that were free in March and have since been pledged to somebody else |
+| Borrower standing | Suspended, subscription incomplete, contributions behind |
+| Platform subscription | Lapsed — borrowing and sponsoring only |
+| Arrears | An existing loan already behind |
+| Borrowing ceiling | Above what policy allows this member |
+| Concentration | Would put too much of the book in one pair of hands |
+| Spendable cash | The money is not actually in the account |
+
+Every decision is written down with the whole gate list and the policy version
+that produced it, approved or not — a member turned away by a rule is owed the
+same explanation as one let through by it:
+
+```
+TSh 3,000,000 approved — every check passed
+  ✓ Sponsor cover        TSh 3,000,000 against TSh 3,000,000 required
+  ✓ Cover still live     TSh 3,000,000 genuinely uncommitted
+  ✓ Borrower standing    In good standing
+  ✓ Arrears              None
+  ✓ Borrowing ceiling    TSh 3,000,000 against a ceiling of TSh 8,400,000
+  ✓ Concentration        3.8% of the book, within the 25% limit
+  ✓ Spendable cash       TSh 284,747,500 can go out today
+  Policy version 2026.09
+```
+
+**Humans handle exceptions, not loans.** Exactly two gates can be authorised
+past, and only by the chair: the policy ceiling and the concentration limit —
+the cases where the rule is a number the members chose and this request sits
+outside it. Somebody asking for TSh 80,000,000 against a TSh 50,000,000 ceiling
+is exceptional, not ineligible, so the request still gathers sponsors and then
+goes to one person with a reason recorded against their name.
+
+Nobody may authorise past missing cover or missing cash. Those are not policies
+to be relaxed; they are the facts the policy exists to protect. A fully covered
+loan the circle cannot pay for waits in the funding queue instead — "we will,
+when we can" is a better answer than a refusal.
+
 On default the loss is absorbed in a fixed order: the borrower's own shares
 first, then the sponsors' pro rata to what they pledged, then personal
 receivables, and only what no pledge reached is written off against the circle.
@@ -159,6 +204,16 @@ Cover is released as the loan is repaid, not held until it closes. Once
 TSh 10,000,000 of a TSh 50,000,000 loan has come back, each of its nine
 sponsors carries TSh 4,000,000 rather than TSh 5,000,000 — freeing
 TSh 9,000,000 of capacity to back the next borrower.
+
+**And that is the only way cover comes back on its own.** A sponsor cannot ask
+to be released. If they want their capacity back before the loan runs its
+course they must pay the cover they are still carrying, and that money stands
+in place of their shares — released back to them on the same proportional rule,
+taken first if the borrower defaults. A guarantee somebody can walk out of when
+it starts to look risky is not a guarantee; it is a promise that holds only
+while it costs nothing, which is exactly when the borrower does not need it.
+The borrower is untouched either way: their schedule is what they agreed, and
+it does not move because somebody else lost their nerve.
 
 ### Before a request reaches anyone, the fee is paid
 

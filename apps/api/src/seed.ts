@@ -192,6 +192,30 @@ export function seed(db: Db, options: { quiet?: boolean } = {}): SeedSummary {
 
     log(`Recorded ${contributionPeriods.length} months of contributions for every member`);
 
+    // The platform subscription is KobeTech's revenue, not the circle's, so
+    // it never touches the ledger. It is recorded here because the approval
+    // gate reads it: a demonstration circle whose members all showed as
+    // unsubscribed would refuse every loan, and look broken for the wrong
+    // reason.
+    if (config.platform.memberSubscription > 0) {
+      for (const period of contributionPeriods) {
+        for (const id of memberIds) {
+          db.prepare(
+            `INSERT INTO platform_subscriptions (id, member_id, period, amount, paid_on, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          ).run(
+            newId('sub'),
+            id,
+            period,
+            config.platform.memberSubscription,
+            `${period}-05`,
+            nowISO(),
+          );
+        }
+      }
+      log(`Recorded ${contributionPeriods.length} months of platform subscriptions`);
+    }
+
     // -----------------------------------------------------------------------
     // 3. External capital: one member advances TSh 200,000,000
     // -----------------------------------------------------------------------

@@ -191,6 +191,20 @@ sent, so nobody is asked to accept something the rules would refuse.
 ### `GET /sponsorships` *(all)*
 The signed-in member's own inbox, with their remaining capacity.
 
+### `GET /loans/:id/decision` *(all)*
+Why the loan was decided as it was: every gate with its outcome and the figure
+it measured, the policy version in force, and any authorisations granted.
+Recorded whether the loan was approved or refused.
+
+### `POST /loans/:id/authorise` *(chair)*
+`{ "gate": "within_ceiling" | "concentration", "reason": "..." }`
+
+The only place a person touches a loan the rules would otherwise have settled.
+Refuses any gate outside `approval.exceptionableGates` — cover and cash cannot
+be authorised past — a reason under 10 characters, and the authoriser's own
+loan. Re-runs the whole gate afterwards: an authoriser clears one rule, they do
+not approve the loan.
+
 ### `POST /sponsorships/:pledgeId/respond` *(the sponsor only)*
 `{ "decision": "accept" | "decline", "note": "..." }`
 

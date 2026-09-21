@@ -213,6 +213,29 @@ export function subscriptionStatus(options: {
 }): SubscriptionStatus {
   const { joinedOn, paidPeriods, monthlyAmount, graceDays, asOf } = options;
 
+  /*
+   * Nobody is in arrears on an invoice that was never issued.
+   *
+   * Until the operator sets a price, there is no subscription to be behind
+   * on, and a member must not be refused a loan from their own circle
+   * because a bill nobody has sent them is unpaid. This matters more than it
+   * looks: the borrowing gate reads this standing, so a subscription left at
+   * zero would otherwise silently freeze lending across the whole circle
+   * while every individual rule appeared to be working.
+   */
+  if (monthlyAmount <= 0) {
+    return {
+      standing: 'not_started',
+      monthsDue: 0,
+      monthsPaid: 0,
+      monthsMissed: 0,
+      nextPeriod: monthKey(asOf),
+      arrears: 0,
+      graceDaysRemaining: 0,
+      withheld: [],
+    };
+  }
+
   // A member owes for every month from the one they joined up to the current
   // one, inclusive — the platform is used from the day they arrive.
   const periods = monthKeysBetween(joinedOn, asOf);

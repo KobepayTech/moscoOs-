@@ -9,7 +9,7 @@ against their own worked examples.
 
 ```bash
 npm install              # workspaces: packages/core, apps/api, apps/admin, apps/mobile
-npm test                 # 368 tests — core (259) then api (109)
+npm test                 # 411 tests — core (290) then api (121)
 npm run seed             # a circle with eight months of history; asserts the books balance
 npm run dev:api          # API + admin panel on http://localhost:4000
 
@@ -59,8 +59,26 @@ A governance vote against a financial record produces a reversal and marks the
 original void — it stays visible.
 
 **Approval is a state transition, not a decision.** A loan approves itself in
-`POST /sponsorships/:id/respond` the moment pledges cover it. Do not add a
-committee step.
+`POST /sponsorships/:id/respond`. Do not add a committee step.
+
+**But cover alone never approves a loan.** `assessApproval` in `approval.ts`
+runs eight gates between "fully covered" and "approved": cover, cover still
+live, borrower standing, subscription, arrears, ceiling, concentration and
+spendable cash. Every decision is recorded with the gate list and a policy
+version (`loan_decisions`), because an automated decision that cannot explain
+itself is worse than a committee.
+
+**Only two gates may be authorised past**, and only by the roles in
+`approval.exceptionAuthorisers`: the policy ceiling and the concentration
+limit. Nobody may authorise past missing cover or missing cash — those are not
+policies to relax, they are the facts the policy protects. Never add a gate to
+`exceptionableGates` without saying why in `FINANCIAL-MODEL.md`.
+
+**A sponsor cannot be released except by paying their cover.** Cover comes back
+one way as a matter of course: the borrower repays. The only other exit is
+`buyoutQuote` — pay what you are still carrying, and the cash stands in place
+of your shares. A guarantee somebody can walk out of when it starts to look
+risky is not a guarantee.
 
 ## Conventions
 
@@ -85,4 +103,5 @@ committee step.
 - Lendable capital, forecasts and concentration: `packages/core/src/capital.ts`
 - Application fee and subscription: `packages/core/src/payments.ts`
 - Cash flow and member statements: `packages/core/src/statements.ts`
+- The approval gate and exceptions: `packages/core/src/approval.ts`
 - Storage ↔ engine bridge: `apps/api/src/circle.ts`

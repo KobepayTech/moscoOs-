@@ -20,6 +20,7 @@ import {
   addDays,
   applyRepayments,
   assessApplicationFee,
+  assessApproval,
   assessEligibility,
   buildShortTermLoan,
   buildTermLoanSchedule,
@@ -28,6 +29,7 @@ import {
   defaultWriteOffEntry,
   evaluateApproval,
   expirePledges,
+  explainDecision,
   formatMoney,
   liveExposure,
   pledgeableCapacity,
@@ -39,17 +41,25 @@ import {
   suggestSponsors,
   today,
   totalPledgedOut,
+  isExceptionable,
+  mayAuthorise,
+  subscriptionAllows,
   validatePledge,
+  type ApprovalGateCode,
+  type LoanProduct,
   type MemberStanding,
 } from '@mamogoro/core';
 
 import { CASHIER_ROLES } from '../auth.js';
 import {
+  approvalInputsFor,
   audit,
   buildBook,
   buildRegister,
   exposureOf,
   headroom,
+  latestDecision,
+  loadAuthorisations,
   loadConfig,
   loadLoan,
   loadPledges,
@@ -61,6 +71,7 @@ import {
   notify,
   notifyCircle,
   post,
+  recordDecision,
   recordShareMovement,
   scheduleFor,
   selfCoverForMember,
@@ -72,7 +83,12 @@ import {
 import { type Db, newId, nowISO, transact } from '../db.js';
 import { ApiError, type Router, arrayField, dateField, enumField, intField, moneyField, str } from '../http.js';
 import { countContributions, findMember } from './members.js';
-import { applicationFeeState, earnApplicationFee, refundApplicationFee } from './payments.js';
+import {
+  applicationFeeState,
+  earnApplicationFee,
+  refundApplicationFee,
+  subscriptionFor,
+} from './payments.js';
 
 /** Assemble the standing the eligibility engine needs. */
 function standingOf(db: Db, config: ReturnType<typeof loadConfig>, memberId: string, asOf: string): MemberStanding {
@@ -279,12 +295,44 @@ export function registerLoanRoutes(router: Router, db: Db): void {
       requestedPrincipal: amount,
     });
 
-    if (!eligibility.eligible) {
-      throw ApiError.unprocessable(
-        'You are not able to take this loan yet',
-        eligibility.problems.filter((problem) => problem.code !== 'sponsors_required'),
-      );
+    /*
+     * An over-ceiling request is exceptional, not ineligible.
+     *
+     * The circle's rule is that normal loans are settled by rules and member
+     * sponsorship, and that humans handle exceptions. Refusing a request of
+     * 80,000,000 against a 50,000,000 ceiling here would mean there is no
+     * exception to handle: the member would simply be turned away at the
+     * door, and the authorisation path could never be reached.
+     *
+     * So the ceiling is allowed through to the approval gate, which will
+     * route it to an authoriser once it is covered. Everything else still
+     * refuses — and it still refuses if the members have not opened the
+     * ceiling to exceptions at all.
+     *
+     * One ceiling is *not* exceptional: the capital the circle actually has.
+     * That is the same fact as the cash gate, and nobody may authorise money
+     * into existence — so a request beyond what the circle could lend at all
+     * is refused here, as it always was.
+     *
+     * Tested against the capital directly rather than against
+     * `bindingConstraint`, which names only the *lowest* ceiling: a request
+     * can exceed the circle's capital while some policy figure is lower
+     * still, and reading the label alone would let it through.
+     */
+    const withinCapital = amount <= space.available;
+    const ceilingIsExceptional = isExceptionable(config, 'within_ceiling') && withinCapital;
+
+    const blocking = eligibility.problems.filter(
+      (problem) =>
+        problem.code !== 'sponsors_required' &&
+        !(ceilingIsExceptional && problem.code === 'over_ceiling'),
+    );
+
+    if (blocking.length > 0) {
+      throw ApiError.unprocessable('You are not able to take this loan yet', blocking);
     }
+
+    const needsAuthorisation = ceilingIsExceptional && amount > eligibility.maxPrincipal;
 
     return transact(db, () => {
       const id = newId('loan');
@@ -341,6 +389,20 @@ export function registerLoanRoutes(router: Router, db: Db): void {
         );
       }
 
+      if (needsAuthorisation) {
+        notify(db, {
+          memberId: principal!.memberId,
+          kind: 'loan_exceptional',
+          title: 'Your request is above the normal ceiling',
+          body:
+            `${formatMoney(amount, config.currency)} is above your current ceiling of ` +
+            `${formatMoney(eligibility.maxPrincipal, config.currency)}. You can still gather sponsors — ` +
+            'once it is fully covered it goes to the chair for authorisation rather than approving itself.',
+          payload: { loanId: id },
+          actionUrl: `/loans/${id}`,
+        });
+      }
+
       audit(db, {
         actorId: principal!.memberId,
         action: 'loan_applied',
@@ -353,7 +415,11 @@ export function registerLoanRoutes(router: Router, db: Db): void {
       return {
         ...loanSummary(db, config, loan, asOf),
         eligibility,
-        nextStep: 'Choose sponsors and send them requests',
+        needsAuthorisation,
+        nextStep: needsAuthorisation
+          ? 'Choose sponsors and send them requests. This request is above the normal ceiling, so once it ' +
+            'is fully covered it goes to the chair for authorisation rather than approving itself.'
+          : 'Choose sponsors and send them requests',
       };
     });
   });
@@ -622,11 +688,99 @@ export function registerLoanRoutes(router: Router, db: Db): void {
 
       const request = sponsorshipRequestFor(db, loan);
       const selfCover = selfCoverForMember(db, config, loan.member_id, asOf);
-      const approval = evaluateApproval(request, { selfCover, asOf });
+
+      /*
+       * Cover is the members' decision, and it stands. But cover alone does
+       * not approve a loan: the gate below re-checks every fact that could
+       * have moved since the borrower applied — the cash in the account, the
+       * sponsors' shares, the borrower's standing, the concentration of the
+       * book — and says what follows.
+       *
+       * Removing the committee removes the meeting, not the control.
+       */
+      const standing = standingOf(db, config, loan.member_id, asOf);
+      const register = buildRegister(db, config, asOf);
+      const space = headroom(db, config, asOf);
+      const eligibility = assessEligibility(config, register, standing, space, {
+        product: loan.product as LoanProduct,
+        asOf,
+        requestedPrincipal: loan.principal,
+      });
+
+      const assessment = assessApproval(
+        config,
+        approvalInputsFor(db, config, loan, standing, eligibility, {
+          subscriptionAllowsBorrowing: subscriptionAllows(subscriptionFor(db, loan.member_id, asOf), 'borrow'),
+          asOf,
+        }),
+      );
+
+      const coverage = coverageStatus(request, { selfCover, asOf });
+
+      // Recorded whichever way it went. A member refused by a rule is owed
+      // the same explanation as one approved by it.
+      recordDecision(db, loan.id, assessment);
 
       let approvedNow = false;
 
-      if (approval.approved && config.sponsorship.autoApproveOnFullCoverage) {
+      // A circle may still turn auto-approval off; the gate then reports what
+      // it would have decided and the loan waits for a person either way.
+      const autoApprove = config.sponsorship.autoApproveOnFullCoverage;
+
+      if (!assessment.approved && coverage.fullyCovered) {
+        // Fully covered but held back by something else. Say which, to the
+        // borrower, in the words the gate used.
+        const status =
+          assessment.outcome === 'awaiting_capital'
+            ? 'awaiting_capital'
+            : assessment.outcome === 'needs_authorisation'
+              ? 'needs_authorisation'
+              : 'awaiting_sponsors';
+
+        if (status !== 'awaiting_sponsors') {
+          db.prepare('UPDATE loans SET status = ? WHERE id = ?').run(status, loan.id);
+        }
+
+        notify(db, {
+          memberId: loan.member_id,
+          kind: assessment.outcome === 'refused' ? 'loan_refused' : 'loan_held',
+          title:
+            assessment.outcome === 'awaiting_capital'
+              ? 'Your loan passed every check and is waiting for capital'
+              : assessment.outcome === 'needs_authorisation'
+                ? 'Your loan is fully sponsored and needs authorisation'
+                : 'Your loan cannot be approved yet',
+          body: explainDecision(assessment).join('\n'),
+          payload: { loanId: loan.id, outcome: assessment.outcome },
+          actionUrl: `/loans/${loan.id}`,
+        });
+
+        // An exception is a person's to answer, so ask them directly rather
+        // than leaving it in a queue nobody owns.
+        if (assessment.outcome === 'needs_authorisation') {
+          for (const authoriser of db
+            .prepare(
+              `SELECT id FROM members WHERE role IN (${config.approval.exceptionAuthorisers
+                .map(() => '?')
+                .join(',')}) AND status = 'active'`,
+            )
+            .all(...config.approval.exceptionAuthorisers) as unknown as { id: string }[]) {
+            notify(db, {
+              memberId: authoriser.id,
+              kind: 'authorisation_required',
+              title: `Authorisation needed: ${formatMoney(loan.principal, config.currency)} to ${borrower.full_name}`,
+              body:
+                `This loan is fully sponsored and passes every other check, but sits outside ` +
+                `${assessment.awaitingAuthorisation.join(' and ')}. ` +
+                explainDecision(assessment).join('\n'),
+              payload: { loanId: loan.id, gates: assessment.awaitingAuthorisation },
+              actionUrl: `/loans/${loan.id}`,
+            });
+          }
+        }
+      }
+
+      if (assessment.approved && autoApprove) {
         db.prepare("UPDATE loans SET status = 'approved', approved_on = ? WHERE id = ?").run(asOf, loan.id);
         approvedNow = true;
 
@@ -666,7 +820,7 @@ export function registerLoanRoutes(router: Router, db: Db): void {
           title: `${borrower.full_name}'s loan was approved`,
           body:
             `${formatMoney(loan.principal, config.currency)} approved on ${asOf}, covered by ` +
-            `${approval.coverage.acceptedSponsorCount} sponsor(s) and the borrower's own shares.`,
+            `${coverage.acceptedSponsorCount} sponsor(s) and the borrower's own shares.`,
           exclude: [loan.member_id],
           actionUrl: `/ledger`,
         });
@@ -683,7 +837,16 @@ export function registerLoanRoutes(router: Router, db: Db): void {
       return {
         decision,
         approvedNow,
-        coverage: approval.coverage,
+        coverage,
+        // The gate's verdict travels with the response so the app can show
+        // exactly why, without a second request.
+        assessment: {
+          outcome: assessment.outcome,
+          headline: assessment.headline,
+          checks: assessment.checks,
+          awaitingAuthorisation: assessment.awaitingAuthorisation,
+          policyVersion: assessment.policyVersion,
+        },
       };
     });
   });
@@ -791,6 +954,159 @@ export function registerLoanRoutes(router: Router, db: Db): void {
       .all(...args) as unknown as LoanRow[];
 
     return { loans: rows.map((loan) => loanSummary(db, config, loan, asOf)) };
+  });
+
+  /**
+   * Why a loan was decided the way it was.
+   *
+   * Open to every member. An automated decision that cannot be read back is
+   * worse than a committee, because at least a committee can be asked.
+   */
+  router.get('/loans/:id/decision', ({ params }) => {
+    const loan = loadLoan(db, params.id);
+    const decision = latestDecision(db, loan.id);
+
+    if (!decision) {
+      return { loanId: loan.id, decision: null, note: 'No automated assessment has run on this loan yet.' };
+    }
+
+    const config = loadConfig(db);
+    return {
+      loanId: loan.id,
+      status: loan.status,
+      ...decision,
+      authorisations: loadAuthorisations(db, config, loan.id),
+    };
+  });
+
+  /**
+   * Authorise an exception.
+   *
+   * The only place a person touches a loan that the rules would otherwise
+   * have settled, and deliberately narrow: only the gates the members opened
+   * (`approval.exceptionableGates`), only by the roles they named, only with
+   * a reason, and only for as long as `authorisationValidDays`.
+   *
+   * Nobody may authorise past missing cover or missing cash. Those are not
+   * policies to be relaxed; they are the facts the policy exists to protect.
+   */
+  router.post('/loans/:id/authorise', ({ params, body, principal }) => {
+    const config = loadConfig(db);
+    const asOf = today();
+    const loan = loadLoan(db, params.id);
+
+    if (!mayAuthorise(config, principal!.role)) {
+      throw ApiError.forbidden(
+        `Only the ${config.approval.exceptionAuthorisers.join(' or ')} may authorise an exception`,
+      );
+    }
+
+    const gate = str(body, 'gate', { max: 40 }) as ApprovalGateCode;
+    const reason = str(body, 'reason', { max: 500 });
+
+    if (!isExceptionable(config, gate)) {
+      throw ApiError.unprocessable(
+        `${gate} cannot be authorised past. The circle allows exceptions only to ` +
+          `${config.approval.exceptionableGates.join(' and ')} — cover and cash are not policies to relax.`,
+      );
+    }
+    if (reason.trim().length < 10) {
+      throw ApiError.unprocessable('An exception needs a reason somebody can read back later');
+    }
+    if (loan.member_id === principal!.memberId) {
+      throw ApiError.forbidden('You cannot authorise an exception for your own loan');
+    }
+
+    return transact(db, () => {
+      db.prepare(
+        `INSERT INTO loan_authorisations
+           (id, loan_id, gate, authorised_by, authorised_on, reason, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (loan_id, gate) DO UPDATE SET
+           authorised_by = excluded.authorised_by,
+           authorised_on = excluded.authorised_on,
+           reason        = excluded.reason,
+           revoked_on    = NULL`,
+      ).run(newId('auth'), loan.id, gate, principal!.memberId, asOf, reason, nowISO());
+
+      // Re-run the gate now that the exception is in place. The authoriser
+      // grants an exception to one rule; they do not approve the loan, and if
+      // something else has since failed the loan still does not go through.
+      const standing = standingOf(db, config, loan.member_id, asOf);
+      const register = buildRegister(db, config, asOf);
+      const space = headroom(db, config, asOf);
+      const eligibility = assessEligibility(config, register, standing, space, {
+        product: loan.product as LoanProduct,
+        asOf,
+        requestedPrincipal: loan.principal,
+      });
+
+      const assessment = assessApproval(
+        config,
+        approvalInputsFor(db, config, loan, standing, eligibility, {
+          subscriptionAllowsBorrowing: subscriptionAllows(subscriptionFor(db, loan.member_id, asOf), 'borrow'),
+          asOf,
+        }),
+      );
+
+      recordDecision(db, loan.id, assessment);
+
+      const borrower = findMember(db, loan.member_id);
+      let approvedNow = false;
+
+      if (assessment.approved && config.sponsorship.autoApproveOnFullCoverage) {
+        db.prepare("UPDATE loans SET status = 'approved', approved_on = ? WHERE id = ?").run(asOf, loan.id);
+        earnApplicationFee(db, loan.id, asOf, principal!.memberId);
+        approvedNow = true;
+
+        notify(db, {
+          memberId: loan.member_id,
+          kind: 'loan_approved',
+          title: 'Your loan has been authorised and approved',
+          body:
+            `${formatMoney(loan.principal, config.currency)} is approved. ${principal!.name} authorised the ` +
+            `exception: ${reason}`,
+          payload: { loanId: loan.id },
+          actionUrl: `/loans/${loan.id}`,
+        });
+
+        for (const cashier of db
+          .prepare("SELECT id FROM members WHERE role IN ('cashier','chair') AND status = 'active'")
+          .all() as unknown as { id: string }[]) {
+          notify(db, {
+            memberId: cashier.id,
+            kind: 'disbursement_due',
+            title: `Disbursement due: ${formatMoney(loan.principal, config.currency)} to ${borrower.full_name}`,
+            body: `Loan ${loan.id} was authorised on ${asOf} and is ready to pay out.`,
+            payload: { loanId: loan.id },
+            actionUrl: `/cashier/disbursements`,
+          });
+        }
+      } else if (assessment.outcome === 'awaiting_capital') {
+        db.prepare("UPDATE loans SET status = 'awaiting_capital' WHERE id = ?").run(loan.id);
+      }
+
+      // An exception is the circle's business, not a private arrangement.
+      notifyCircle(db, {
+        kind: 'governance',
+        title: `${principal!.name} authorised an exception on ${borrower.full_name}'s loan`,
+        body:
+          `${formatMoney(loan.principal, config.currency)} sits outside the ${gate} rule. Reason given: ` +
+          `${reason}`,
+        exclude: [principal!.memberId],
+        actionUrl: `/loans/${loan.id}`,
+      });
+
+      audit(db, {
+        actorId: principal!.memberId,
+        action: 'authorise_exception',
+        entityType: 'loan',
+        entityId: loan.id,
+        detail: { gate, reason, outcome: assessment.outcome, approvedNow },
+      });
+
+      return { loanId: loan.id, gate, approvedNow, assessment };
+    });
   });
 
   router.get('/loans/:id', ({ params, query }) => {

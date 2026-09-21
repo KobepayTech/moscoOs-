@@ -117,7 +117,8 @@ CREATE TABLE IF NOT EXISTS loans (
   principal         INTEGER NOT NULL CHECK (principal > 0),
   purpose           TEXT,
   status            TEXT    NOT NULL
-                      CHECK (status IN ('draft','awaiting_sponsors','approved','disbursed',
+                      CHECK (status IN ('draft','awaiting_sponsors','awaiting_capital',
+                                        'needs_authorisation','approved','disbursed',
                                         'settled','defaulted','declined','cancelled')),
   -- Term-loan pricing
   monthly_rate      REAL,
@@ -336,6 +337,41 @@ CREATE TABLE IF NOT EXISTS platform_subscriptions (
   UNIQUE (member_id, period)
 );
 
+-- Every automated approval decision, with the checks that produced it.
+--
+-- Written whether the loan was approved or not: a member refused by a rule is
+-- owed the same explanation as one approved by it, and a decision nobody can
+-- reconstruct is indistinguishable from an opinion.
+CREATE TABLE IF NOT EXISTS loan_decisions (
+  id             TEXT PRIMARY KEY,
+  loan_id        TEXT    NOT NULL REFERENCES loans(id),
+  outcome        TEXT    NOT NULL,
+  headline       TEXT    NOT NULL,
+  -- The full gate list as assessed, so the decision can be read back exactly
+  -- as it was made rather than re-derived against today's rules.
+  checks_json    TEXT    NOT NULL,
+  policy_version TEXT    NOT NULL,
+  assessed_on    TEXT    NOT NULL,
+  created_at     TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_decisions_loan ON loan_decisions(loan_id);
+
+-- Exceptions a person authorised, against a named gate.
+--
+-- An exception with nobody's name on it is not an exception, it is a hole.
+CREATE TABLE IF NOT EXISTS loan_authorisations (
+  id             TEXT PRIMARY KEY,
+  loan_id        TEXT    NOT NULL REFERENCES loans(id),
+  gate           TEXT    NOT NULL,
+  authorised_by  TEXT    NOT NULL REFERENCES members(id),
+  authorised_on  TEXT    NOT NULL,
+  reason         TEXT    NOT NULL,
+  revoked_on     TEXT,
+  created_at     TEXT    NOT NULL,
+  UNIQUE (loan_id, gate)
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   actor_id    TEXT,
@@ -357,7 +393,44 @@ export function openDb(options: DbOptions = {}): Db {
 
   const db = new DatabaseSync(location);
   db.exec(SCHEMA);
+  migrate(db);
   return db;
+}
+
+/**
+ * Bring an existing database up to the current schema.
+ *
+ * SQLite cannot alter a CHECK constraint in place, so widening the set of
+ * loan statuses means rebuilding the table. Detected from the stored DDL
+ * rather than a version counter, so a database that has already been rebuilt
+ * is left alone and the check is free on every subsequent open.
+ */
+function migrate(db: Db): void {
+  const loans = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'loans'")
+    .get() as unknown as { sql: string } | undefined;
+
+  if (!loans || loans.sql.includes('awaiting_capital')) return;
+
+  // The approval gate introduced two states between "covered" and "approved".
+  // Older databases predate them and would reject the UPDATE at runtime.
+  const widened = loans.sql.replace(
+    /CHECK \(status IN \([^)]*\)\)/,
+    "CHECK (status IN ('draft','awaiting_sponsors','awaiting_capital'," +
+      "'needs_authorisation','approved','disbursed','settled','defaulted'," +
+      "'declined','cancelled'))",
+  );
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  transact(db, () => {
+    db.exec(widened.replace('CREATE TABLE loans', 'CREATE TABLE loans_migrated'));
+    db.exec('INSERT INTO loans_migrated SELECT * FROM loans');
+    db.exec('DROP TABLE loans');
+    db.exec('ALTER TABLE loans_migrated RENAME TO loans');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_loans_member ON loans(member_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_loans_status ON loans(status)');
+  });
+  db.exec('PRAGMA foreign_keys = ON');
 }
 
 /**
