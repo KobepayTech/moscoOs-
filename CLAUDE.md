@@ -30,7 +30,7 @@ The seeded circle signs in with any member's phone number and the password
 |---|---|
 | `packages/core` | The domain engine. Pure, no I/O, no dependencies. |
 | `apps/api` | REST API. `node:http` + `node:sqlite`, no framework. |
-| `apps/admin/public` | Admin panel: plain ES modules, no build step, served by the API. |
+| `apps/admin/public` | Admin panel: plain ES modules, no build step, served by the API. `app.js` is the shell only — the route table, the frame and start-up. Each workspace is a module in `views/`; what they share is in `lib/`. |
 | `apps/mobile` | Member app: Expo / React Native. |
 
 Build output nests under `dist/src/` (the tsconfig `rootDir` is `.` so tests

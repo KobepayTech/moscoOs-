@@ -25,7 +25,8 @@ apps/api          REST API. Node's built-in HTTP and node:sqlite — no native
                   build, no database server, no framework.    96 tests
 
 apps/admin        The admin panel every member can sign into. Plain ES modules,
-                  no build step. Served by the API.
+                  no build step. Served by the API. One module per workspace
+                  under views/, shared pieces under lib/.
 
 apps/mobile       The member app. Expo / React Native.
 
