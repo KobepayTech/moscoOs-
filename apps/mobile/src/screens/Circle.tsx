@@ -27,6 +27,7 @@ import {
 } from '../components';
 import { radius, spacing, usePalette } from '../theme';
 import { useAsync } from '../useAsync';
+import { CashFlowCard } from './Statements';
 
 interface Dashboard {
   headline: string;
@@ -179,6 +180,8 @@ export function CircleScreen() {
           posting a reversal, and the original stays visible.
         </Caption>
       </Card>
+
+      <CashFlowCard />
     </Screen>
   );
 }

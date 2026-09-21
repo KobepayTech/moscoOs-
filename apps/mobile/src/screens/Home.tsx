@@ -26,6 +26,7 @@ import {
 } from '../components';
 import { spacing } from '../theme';
 import { useAsync } from '../useAsync';
+import { MyStatementCard } from './Statements';
 
 interface MeResponse {
   member: { fullName: string; role: string };
@@ -162,6 +163,8 @@ export function HomeScreen() {
           value is uncommitted.
         </Caption>
       </Card>
+
+      <MyStatementCard />
     </Screen>
   );
 }
