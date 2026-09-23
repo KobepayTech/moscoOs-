@@ -20,10 +20,11 @@ circle actually lends out. Every member can read every entry in the books.
 packages/core     The domain engine. Pure TypeScript, no I/O, no dependencies.
                   Money, shares, interest, amortisation, the facility waterfall,
                   sponsorship, governance, payments, capital, statements, the
-                  approval gate, settlement and the ledger.   309 tests
+                  approval gate, settlement, the capital exchange and
+                  the ledger.                                 342 tests
 
 apps/api          REST API. Node's built-in HTTP and node:sqlite — no native
-                  build, no database server, no framework.   148 tests
+                  build, no database server, no framework.   169 tests
 
 apps/admin        The admin panel every member can sign into. Plain ES modules,
                   no build step. Served by the API. One module per workspace
@@ -35,7 +36,7 @@ docs/             FINANCIAL-MODEL.md — every rule, worked through.
                   API.md — the endpoints.
 ```
 
-**457 tests, all passing.** The financial rules are proved against the worked
+**511 tests, all passing.** The financial rules are proved against the worked
 examples the circle agreed, not against whatever the code happens to do.
 
 ---
@@ -46,7 +47,7 @@ Requires Node 22.5 or later (for `node:sqlite`). Nothing else.
 
 ```bash
 npm install
-npm test                  # 457 tests across core and api
+npm test                  # 511 tests across core and api
 npm run seed              # a circle with eight months of history
 npm run dev:api           # http://localhost:4000
 ```
@@ -250,6 +251,36 @@ PalmPesa also cannot reverse a collection — initiate and order-status are its
 whole surface. The application fee is still refundable, so a refund is a payout
 somebody makes and records, and the system says so plainly rather than failing
 at the moment of need.
+
+### The circle can borrow from its own members
+
+A member with money idle and a circle short of lending capital are the same
+problem seen from two ends. The exchange makes closing that gap a published
+market rather than a private arrangement: the circle posts what it needs,
+members offer portions, and each accepted offer becomes an ordinary facility —
+same ledger entry, same utilisation waterfall, same repayment queue.
+
+Three guards, and none of them can be authorised past, because this is members'
+savings rather than an outside investor's:
+
+- **A call must leave a spread.** Borrowing at 2% to lend at 2% destroys the
+  circle's capital while looking busy. The spread has to absorb losses and
+  running costs before members' own capital earns anything.
+- **A call must outlast the loans it funds.** Money taken for one month and
+  lent for three cannot be returned when it is asked for. Three-month loans
+  need at least four-month money.
+- **No member may become the circle.** Whoever funds most of the book has it
+  over a barrel at renewal, whatever the rules say on paper.
+
+Oversubscribed calls are scaled pro rata, not first-come — a call that closes
+in the first ten minutes rewards whoever was holding their phone. The
+concentration cap is a ceiling *inside* the scaling and what it displaces is
+redistributed pro rata too, so two members who offered the same are taken up on
+the same.
+
+And a member is told the truth before committing: a facility earns on what is
+actually lent out, not on what was put in. Idle capital earns nothing, which is
+what stops a circle raising more than it can use.
 
 ### A surplus is not money in the account
 

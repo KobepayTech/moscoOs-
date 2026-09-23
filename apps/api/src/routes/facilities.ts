@@ -54,6 +54,14 @@ export function registerFacilityRoutes(router: Router, db: Db): void {
    * what that earned. An investor whose money sat idle sees zero here, and
    * sees *why*.
    */
+  /** The note recorded when the facility was created, if any. */
+  function noteFor(database: Db, facilityId: string): string | null {
+    const row = database.prepare('SELECT note FROM facilities WHERE id = ?').get(facilityId) as unknown as
+      | { note: string | null }
+      | undefined;
+    return row?.note ?? null;
+  }
+
   router.get('/facilities', ({ query }) => {
     const config = loadConfig(db);
     const asOf = query.get('asOf') ?? today();
@@ -99,6 +107,9 @@ export function registerFacilityRoutes(router: Router, db: Db): void {
         return {
           ...facility,
           investorName: findMember(db, facility.investorMemberId).full_name,
+          // Where this capital came from — a private arrangement or a
+          // published call. Provenance a member is entitled to see.
+          note: noteFor(db, facility.id),
           utilisedNow: split.perFacility.get(facility.id) ?? 0,
           accrual: facilityAccrual,
           totalDue: statement.totalDue,

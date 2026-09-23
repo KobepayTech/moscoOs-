@@ -103,7 +103,7 @@ export class RateModelError extends Error {
  * system is confused about. Ten decimal places is far finer than any rate the
  * circle will ever quote, so nothing meaningful is lost.
  */
-function cleanRate(value: number): number {
+export function cleanRate(value: number): number {
   return Number(value.toFixed(10));
 }
 

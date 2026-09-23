@@ -1102,3 +1102,109 @@ the report.
 `cashInTransit` is available separately: a circle that has confirmed a hundred
 collections and received none of them is not as liquid as its balance sheet
 says, and that figure is exactly the difference.
+
+---
+
+## 14. The internal capital exchange
+
+**Implemented in** `packages/core/src/exchange.ts` · **proved in**
+`test/exchange.test.ts` and `apps/api/test/exchange.test.ts`
+
+A member with money idle and a circle short of lending capital are the same
+problem seen from two ends. Until now the only way to close that gap was for
+somebody to negotiate a facility privately with the committee. The exchange
+makes it a published, rule-bound market: the circle says what it needs,
+members offer portions, and the offers become facilities.
+
+### It is the facility mechanism, not a new one
+
+Nothing here invents a way to hold members' money. A member who lends the
+circle capital for a term at a rate has made a **facility** (section 5): a
+liability, not equity; no dilution, no vote, and a return earned only on the
+part actually lent out. That machinery is built and proved, and it already
+drives the utilisation waterfall.
+
+So the module does three things — decide what to raise, check a call is safe
+to publish, and allocate offers — and the moment a call closes every
+allocation is an ordinary drawdown. A capital market with its own accounting
+would be a capital market nobody could audit.
+
+### Three ways this goes wrong
+
+Taking money from members is not taking it from an outside investor. These are
+their savings, and the circle owes them a standard of care it does not owe a
+bank. Each guard is named for the failure it prevents, and **none of them is
+an exception anybody may authorise past**.
+
+**Paying more than you earn.** A circle borrowing from members at 2% and
+lending at 2% is destroying its own capital while looking busy. Every call must
+leave `exchange.minimumSpread` below the lending rate — a full point by
+default, because the spread has to absorb expected losses and running costs
+before the members' own capital earns anything. `validateConfig` refuses a
+setting where no call could ever be published.
+
+**Borrowing short to lend long.** This is how institutions fail. Money taken
+for one month and lent for three cannot be returned when it is asked for, and
+the circle is then raising again to repay the last lot — which works until it
+does not. A call's term must exceed the loan term by
+`exchange.maturityBufferMonths`. With 3-month loans and a 1-month buffer, the
+shortest publishable term is four months, and `committedUntil` on the
+resulting facility makes it real.
+
+**One member becoming the circle.** A member who funds most of the book has the
+circle over a barrel at renewal, whatever the governance rules say on paper.
+No member may take more than `exchange.maxShareOfOneCall` of a single call, and
+external capital as a whole is capped at a multiple of members' own.
+
+### Deciding whether to ask at all
+
+Conservative on purpose. A circle that raises capital it does not lend pays a
+return on idle money — the investor's problem in section 5, turned around onto
+the members. `assessFundingNeed` counts the gap as *approved lending the
+circle cannot fund*, less repayments already due inside the term:
+
+```
+shortfall = committed lending − spendable now
+gap       = shortfall − dependable inflow
+```
+
+If repayments already due close it, there is nothing to raise. Paying for
+capital the circle is about to have anyway is not a funding need.
+
+### Allocation
+
+Under-subscribed, everybody is taken in full. Over-subscribed, offers are
+scaled **pro rata** rather than filled first-come: a call open for a week that
+in practice closes in the first ten minutes rewards whoever happened to be
+holding their phone, which is not a way to run a members' circle.
+
+The concentration cap is a *ceiling inside the scaling*, not a correction
+afterwards, and what it displaces is itself redistributed pro rata. That
+distinction is not academic — handing the displaced amount to whoever came
+first gave two identical 5,000,000 offers allocations of 3,368,421 and
+2,631,579 on a real run, which is exactly the unfairness pro rata exists to
+prevent. Filling proceeds in rounds until nothing is left or nobody has room,
+with largest-remainder each round so the call fills to the shilling.
+
+Where the ceilings bind below the target the call simply raises less. The
+allocation never invents the difference.
+
+### What a member is told before they commit
+
+The quote states the best case **and that it is the best case**:
+
+> If the circle lends all of it for the whole 4 months, TSh 10,000,000 earns
+> TSh 600,000. It earns on what is actually lent out, not on what you put in —
+> idle capital earns nothing, which is what keeps the circle from raising more
+> than it can use.
+
+A member who reads "1.5% a month" and assumes that is what their money will
+earn has not been told the truth.
+
+### A note on what this is
+
+Members lending the circle money for a fixed term at a stated return is
+deposit-taking in substance, whatever it is called. The engineering here is
+conservative and the guards are real, but they are not a legal opinion, and
+the Tanzanian licensing position for a SACCOS operating an internal capital
+market should be settled before a circle uses this in earnest.

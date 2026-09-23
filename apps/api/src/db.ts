@@ -337,6 +337,54 @@ CREATE TABLE IF NOT EXISTS platform_subscriptions (
   UNIQUE (member_id, period)
 );
 
+-- The internal capital exchange: what the circle is asking members to lend.
+--
+-- A call is a published offer of terms. Nothing here holds money — an accepted
+-- offer becomes an ordinary facility, so the ledger, the utilisation waterfall
+-- and the repayment queue all apply to it unchanged.
+CREATE TABLE IF NOT EXISTS funding_calls (
+  id             TEXT PRIMARY KEY,
+  purpose        TEXT    NOT NULL,
+  target         INTEGER NOT NULL CHECK (target > 0),
+  minimum_offer  INTEGER NOT NULL CHECK (minimum_offer > 0),
+  term_months    INTEGER NOT NULL CHECK (term_months > 0),
+  monthly_rate   REAL    NOT NULL CHECK (monthly_rate >= 0),
+  opens_on       TEXT    NOT NULL,
+  closes_on      TEXT    NOT NULL,
+  status         TEXT    NOT NULL
+                   CHECK (status IN ('draft','open','filled','closed','cancelled')),
+  opened_by      TEXT    NOT NULL REFERENCES members(id),
+  closed_on      TEXT,
+  created_at     TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_calls_status ON funding_calls(status);
+
+-- A member's commitment against a call.
+--
+-- One live offer per member per call: a member who wants to change their mind
+-- withdraws and offers again, so the register never has to decide which of two
+-- competing numbers they meant.
+CREATE TABLE IF NOT EXISTS capital_offers (
+  id           TEXT PRIMARY KEY,
+  call_id      TEXT    NOT NULL REFERENCES funding_calls(id),
+  member_id    TEXT    NOT NULL REFERENCES members(id),
+  amount       INTEGER NOT NULL CHECK (amount > 0),
+  offered_on   TEXT    NOT NULL,
+  status       TEXT    NOT NULL
+                 CHECK (status IN ('offered','accepted','scaled','declined','withdrawn')),
+  -- Set when the call closes: what the member was actually taken up on, and
+  -- the facility it became.
+  allocated    INTEGER,
+  facility_id  TEXT REFERENCES facilities(id),
+  created_at   TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_offers_call ON capital_offers(call_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_offers_live
+  ON capital_offers(call_id, member_id)
+  WHERE status IN ('offered','accepted','scaled');
+
 -- Credits on the circle's settlement account, as read off a statement.
 --
 -- There is no API to ask KobePay what it has paid out: settlement lines are

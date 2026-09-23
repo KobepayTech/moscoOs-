@@ -253,6 +253,40 @@ Every entry, the balance sheet and the trial balance. `?asOf=` `?memberId=`
 ### `GET /reports/income` *(all)* — `?from=` `?to=`
 ### `GET /reports/position` *(all)* — includes `booksBalance`
 
+## The capital exchange
+
+### `GET /exchange/need` *(all)*
+Whether the circle should be raising, the gap, and the terms it can keep —
+`minimumTermMonths` and `maximumMonthlyRate`. Open to everyone: a member being
+asked to lend is entitled to the figure the committee decided on.
+
+### `GET /exchange/calls` *(all)* · `GET /exchange/calls/:id` *(all)*
+Every call with its position, and for one call every offer with the member who
+made it. Who funds the circle is not private.
+
+### `POST /exchange/calls` *(cashier)*
+`{ "purpose": "...", "target": ..., "minimumOffer": ..., "termMonths": 4,
+"monthlyRate": 0.015, "closesOn": "..." }`
+
+Refuses a rate above `lendingRate − minimumSpread`, a term shorter than the
+loans it funds, and a target that would breach the leverage ceiling. No
+authorisation path past any of them.
+
+### `POST /exchange/calls/:id/offers` *(all)*
+`{ "amount": ... }` — replaces the member's earlier offer on that call.
+Returns `bestCase` and the note that a facility earns on what is *lent out*,
+not on what was put in.
+
+### `POST /exchange/offers/:id/withdraw` *(the offerer)*
+Refused once the offer has become a facility.
+
+### `POST /exchange/calls/:id/close` *(cashier)* · `POST /exchange/calls/:id/cancel` *(cashier)*
+Closing allocates pro rata under the concentration cap and turns each
+allocation into an ordinary facility drawdown. Cancelling lapses every offer —
+nobody's money was ever taken.
+
+---
+
 ### `POST /settlements/import` *(cashier)*
 `{ "account": "kobepay", "lines": [{ "id": "...", "amount": 47500, "settledOn": "...",
 "reference": "...", "railReceipt": "...", "narrative": "..." }] }`

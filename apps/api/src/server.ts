@@ -11,6 +11,7 @@ import { openDb, type Db } from './db.js';
 import { Router } from './http.js';
 import { createStaticHandler } from './static.js';
 import { registerDashboardRoutes } from './routes/dashboard.js';
+import { registerExchangeRoutes } from './routes/exchange.js';
 import { registerFacilityRoutes } from './routes/facilities.js';
 import { registerGovernanceRoutes } from './routes/governance.js';
 import { registerLoanRoutes } from './routes/loans.js';
@@ -35,6 +36,7 @@ export function buildRouter(db: Db): Router {
   registerLoanRoutes(router, db);
   registerPaymentRoutes(router, db);
   registerFacilityRoutes(router, db);
+  registerExchangeRoutes(router, db);
   registerGovernanceRoutes(router, db);
   return router;
 }

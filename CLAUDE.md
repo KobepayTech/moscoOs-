@@ -9,7 +9,7 @@ against their own worked examples.
 
 ```bash
 npm install              # workspaces: packages/core, apps/api, apps/admin, apps/mobile
-npm test                 # 457 tests — core (309) then api (148)
+npm test                 # 511 tests — core (342) then api (169)
 npm run seed             # a circle with eight months of history; asserts the books balance
 npm run dev:api          # API + admin panel on http://localhost:4000
 
@@ -88,6 +88,12 @@ sender reaches both. Never re-serialise the parsed body to check a signature,
 never add a default secret, and never compare digests with `!==`. A `PENDING`
 callback is not a confirmation.
 
+**An exchange offer becomes an ordinary facility, never a new thing.** A
+member lending the circle money for a term at a rate *is* a facility. Do not
+give the exchange its own accounting. Its three guards — the spread below the
+lending rate, a term outlasting the loans it funds, and the cap on one member's
+share — are not exceptionable and have no authorisation path.
+
 **A sponsor cannot be released except by paying their cover.** Cover comes back
 one way as a matter of course: the borrower repays. The only other exit is
 `buyoutQuote` — pay what you are still carrying, and the cash stands in place
@@ -119,5 +125,6 @@ risky is not a guarantee.
 - Cash flow and member statements: `packages/core/src/statements.ts`
 - The approval gate and exceptions: `packages/core/src/approval.ts`
 - Settlement matching: `packages/core/src/settlement.ts`
+- The capital exchange: `packages/core/src/exchange.ts`
 - Payment rails: `apps/api/src/providers.ts`
 - Storage ↔ engine bridge: `apps/api/src/circle.ts`

@@ -27,5 +27,6 @@ export * from './capital.js';
 export * from './statements.js';
 export * from './approval.js';
 export * from './settlement.js';
+export * from './exchange.js';
 
 export const CORE_VERSION = '0.1.0';

@@ -266,6 +266,43 @@ export type ApprovalGateCode =
   | 'concentration'
   | 'spendable_cash';
 
+/**
+ * The internal capital exchange.
+ *
+ * Every number here exists to stop the circle doing something to its members
+ * that looks sensible in the moment. They are not policy preferences to be
+ * tuned freely — each one is named for the failure it prevents.
+ */
+export interface ExchangeConfig {
+  /** Whether members may be asked to lend the circle capital at all. */
+  enabled: boolean;
+  /**
+   * Margin the circle must keep between what it lends at and what it pays.
+   *
+   * Below this the raise stops paying for itself: the spread has to cover
+   * expected losses and running costs, not merely be positive.
+   */
+  minimumSpread: number;
+  /**
+   * Months a call's term must exceed the loans it funds.
+   *
+   * Borrowing short to lend long is how institutions fail. Money taken for
+   * one month and lent for three cannot be returned when it is asked for.
+   */
+  maturityBufferMonths: number;
+  /** External capital as a multiple of members' own capital. */
+  maxExternalToEquity: number;
+  /**
+   * The most one member may fund of a single call.
+   *
+   * A member who funds most of the book has the circle over a barrel at
+   * renewal, whatever the governance rules say on paper.
+   */
+  maxShareOfOneCall: number;
+  /** Round a suggested target up to this, so calls are published in round figures. */
+  targetRoundingStep: Money;
+}
+
 export interface CircleConfig {
   circleName: string;
   currency: string;
@@ -276,6 +313,7 @@ export interface CircleConfig {
   applicationFee: ApplicationFeeConfig;
   platform: PlatformConfig;
   approval: ApprovalConfig;
+  exchange: ExchangeConfig;
   termLoan: TermLoanConfig;
   shortTermLoan: ShortTermLoanConfig;
   sponsorship: SponsorshipConfig;
@@ -334,6 +372,17 @@ export function defaultCircleConfig(): CircleConfig {
       subscriptionGraceDays: 7,
       subscriptionProvider: 'palmpesa',
       settlementProvider: 'kobepay',
+    },
+
+    exchange: {
+      enabled: true,
+      // 2.5% lent against at most 1.5% paid: a full point to absorb losses
+      // and running costs before the members' own capital earns anything.
+      minimumSpread: 0.01,
+      maturityBufferMonths: 1,
+      maxExternalToEquity: 2,
+      maxShareOfOneCall: 0.4,
+      targetRoundingStep: 1_000_000,
     },
 
     approval: {
@@ -489,6 +538,38 @@ export function validateConfig(config: CircleConfig): ConfigProblem[] {
       `Lending rate (${config.termLoan.monthlyInterestRate}) must exceed the cost of external capital ` +
         `(${config.facility.investorMonthlyRate}); otherwise every loan funded by a facility loses money`,
     );
+  }
+
+  // The exchange takes members' savings, so a contradictory setting here is
+  // not a preference to be tolerated — it is a promise the circle cannot keep.
+  if (config.exchange.enabled) {
+    if (config.exchange.minimumSpread <= 0) {
+      fail(
+        'exchange.minimumSpread',
+        'A zero spread means the circle pays members exactly what it earns and absorbs every loss ' +
+          'itself. The spread must cover expected losses and running costs.',
+      );
+    }
+    if (config.termLoan.monthlyInterestRate - config.exchange.minimumSpread <= 0) {
+      fail(
+        'exchange.minimumSpread',
+        `A spread of ${config.exchange.minimumSpread} against a lending rate of ` +
+          `${config.termLoan.monthlyInterestRate} leaves nothing to offer members. No call could be ` +
+          'published under these settings.',
+      );
+    }
+    if (config.exchange.maturityBufferMonths < 0) {
+      fail(
+        'exchange.maturityBufferMonths',
+        'A negative buffer would let the circle take money for less time than it lends it out',
+      );
+    }
+    if (config.exchange.maxShareOfOneCall <= 0 || config.exchange.maxShareOfOneCall > 1) {
+      fail('exchange.maxShareOfOneCall', "One member's share of a call must be a fraction above zero");
+    }
+    if (config.exchange.maxExternalToEquity <= 0) {
+      fail('exchange.maxExternalToEquity', 'The leverage ceiling must be positive');
+    }
   }
 
   if (config.shortTermLoan.maxDays <= 0) fail('shortTermLoan.maxDays', 'Short-term window must be positive');
