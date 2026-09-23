@@ -465,3 +465,75 @@ describe('reconciliation', () => {
     assert.equal(body.clean, true);
   });
 });
+
+describe('settlement — proving the money actually arrived', () => {
+  it('imports statement lines, and refuses to count the same statement twice', async () => {
+    const token = await signIn(phoneOf(1));
+
+    const statement = {
+      account: 'kobepay',
+      lines: [
+        { id: 'KP-0001', amount: 47_500, settledOn: today(), reference: 'pay_unknown_1' },
+        { id: 'KP-0002', amount: 100_000, settledOn: today(), narrative: 'CASH DEPOSIT' },
+      ],
+    };
+
+    const first = await call('/settlements/import', { method: 'POST', token, body: statement });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.equal(first.body.imported, 2);
+    assert.equal(first.body.alreadyKnown, 0);
+
+    // The mistake anybody doing this by hand makes eventually.
+    const again = await call('/settlements/import', { method: 'POST', token, body: statement });
+    assert.equal(again.body.imported, 0);
+    assert.equal(again.body.alreadyKnown, 2);
+    assert.match(again.body.note as string, /not counted twice/);
+  });
+
+  it('refuses a debit dressed as a credit', async () => {
+    const token = await signIn(phoneOf(1));
+    const { status, body } = await call('/settlements/import', {
+      method: 'POST',
+      token,
+      body: { lines: [{ id: 'KP-BAD', amount: -500, settledOn: today() }] },
+    });
+
+    assert.ok(status >= 400);
+    assert.match(JSON.stringify(body), /positive|amount/);
+  });
+
+  it('is the cashier’s to import, not any member’s', async () => {
+    const member = await signIn(phoneOf(10));
+    const { status } = await call('/settlements/import', {
+      method: 'POST',
+      token: member,
+      body: { lines: [{ id: 'KP-X', amount: 1_000, settledOn: today() }] },
+    });
+
+    assert.equal(status, 403);
+  });
+
+  it('reports the exceptions and leaves the agreement alone', async () => {
+    const token = await signIn(phoneOf(10));
+    const { status, body } = await call('/settlements/reconciliation', { token });
+
+    assert.equal(status, 200);
+    assert.equal(body.account, 'kobepay');
+    assert.match(body.headline as string, /settlement/);
+
+    const kinds = (body.exceptions as { kind: string }[]).map((problem) => problem.kind);
+
+    // The 100,000 deposit matches no collection, and must be explained.
+    assert.ok(kinds.includes('unexpected_credit'), JSON.stringify(kinds));
+
+    // Fees confirmed in these tests were never settled, so they show as money
+    // the books claim and the account has not received.
+    assert.ok(body.totals.inTransit > 0, 'the books claim money the account has not received');
+  });
+
+  it('is readable by every member, because it is the circle’s money', async () => {
+    const member = await signIn(phoneOf(11));
+    assert.equal((await call('/settlements/reconciliation', { token: member })).status, 200);
+    assert.equal((await call('/settlements/reconciliation')).status, 401);
+  });
+});

@@ -1024,3 +1024,81 @@ Nowhere, as an approver. The cashier does not decide anything: by the time a
 loan reaches them the rules and the members have settled it, and their job is
 to hand over the money and record that they did. Making them a second gate
 would recreate the bottleneck the design removes.
+
+---
+
+## 13. Settlement
+
+**Implemented in** `packages/core/src/settlement.ts` · **proved in**
+`test/settlement.test.ts` and `apps/api/test/payments.test.ts`
+
+Confirming a payment and receiving it are not the same event, and the gap
+between them is where money goes missing without anybody noticing.
+
+When a member approves a USSD prompt, PalmPesa tells MoscoOS the collection
+succeeded and the books record the net (section 4a). But the cash is with the
+operator at that moment. It reaches the circle's KobePay account later, on the
+rail's own settlement cycle, batched with everybody else's. Between those two
+moments the books assert the circle holds money it has not been given — which
+is correct, because it is owed, but a circle that never checks the second half
+cannot discover a settlement that was short, late, or never came.
+
+### Why this is a matcher and not a client
+
+There is no endpoint to ask. KobePay is an account, not a service: nothing in
+KobeOS exposes a payout, a settlement query or a statement feed, and the 5%
+the operator keeps is deducted before the remainder is remitted rather than
+invoiced back. So settlement lines are **imported** — a statement, an export,
+a screen somebody reads — and the circle's job is to match them against what
+it believes it collected.
+
+The import is idempotent on the statement's own line id. Loading the same
+statement twice is the mistake anybody doing this by hand makes eventually,
+and doubling the circle's recorded receipts is a bad way to find out.
+
+### How a line is matched
+
+In descending order of how far a match can be trusted:
+
+1. **the reference we sent** — the intent id, which PalmPesa echoes back;
+2. **the rail receipt** — the mobile-money code, which often survives on a
+   statement where the reference does not;
+3. **the narrative** — searched for the reference as a last resort.
+
+The basis travels with every match. A narrative match is a guess, and a
+treasurer should be able to see *why* two lines were paired before accepting
+it. One credit can only ever settle one collection; where two could claim the
+same line, it goes to whichever has been waiting longest.
+
+### Five exceptions, not one "mismatch"
+
+| Kind | What it means | What to do |
+|---|---|---|
+| `awaiting_settlement` | Collected recently, money still in transit | Nothing — this is the system working |
+| `overdue_settlement` | Past the tolerated wait and still not here | Ask the operator |
+| `short_settlement` | Less arrived than was collected | Find the difference |
+| `over_settlement` | More arrived than was collected | Find whose it is |
+| `unexpected_credit` | Money with no collection behind it | Find out whose it is before spending it |
+
+They are separate kinds because each is a different problem with a different
+answer, and collapsing them into one list would leave a treasurer to sort them
+out by hand.
+
+### What a treasurer should have to read
+
+Not two hundred matching lines:
+
+```
+247 settlements matched, 4 in transit, 3 need attention.
+  · TSh 47,500 collected on 12 Sept has not settled (11 days). Ask the operator.
+  · TSh 47,500 expected, TSh 45,000 received — short by TSh 2,500.
+  · TSh 100,000 arrived against no collection. Find out whose it is.
+```
+
+Money in transit is counted as settled for that headline. It is the system
+working, not a problem, and reporting it as one teaches a treasurer to ignore
+the report.
+
+`cashInTransit` is available separately: a circle that has confirmed a hundred
+collections and received none of them is not as liquid as its balance sheet
+says, and that figure is exactly the difference.

@@ -20,10 +20,10 @@ circle actually lends out. Every member can read every entry in the books.
 packages/core     The domain engine. Pure TypeScript, no I/O, no dependencies.
                   Money, shares, interest, amortisation, the facility waterfall,
                   sponsorship, governance, payments, capital, statements, the
-                  approval gate and the ledger.               290 tests
+                  approval gate, settlement and the ledger.   309 tests
 
 apps/api          REST API. Node's built-in HTTP and node:sqlite — no native
-                  build, no database server, no framework.   121 tests
+                  build, no database server, no framework.   148 tests
 
 apps/admin        The admin panel every member can sign into. Plain ES modules,
                   no build step. Served by the API. One module per workspace
@@ -35,7 +35,7 @@ docs/             FINANCIAL-MODEL.md — every rule, worked through.
                   API.md — the endpoints.
 ```
 
-**411 tests, all passing.** The financial rules are proved against the worked
+**457 tests, all passing.** The financial rules are proved against the worked
 examples the circle agreed, not against whatever the code happens to do.
 
 ---
@@ -46,7 +46,7 @@ Requires Node 22.5 or later (for `node:sqlite`). Nothing else.
 
 ```bash
 npm install
-npm test                  # 411 tests across core and api
+npm test                  # 457 tests across core and api
 npm run seed              # a circle with eight months of history
 npm run dev:api           # http://localhost:4000
 ```
@@ -227,6 +227,29 @@ Each member also pays KobeTech a monthly subscription to use the platform.
 That is the operator's revenue and never appears in the circle's ledger. If it
 lapses, borrowing and sponsoring are withheld — but never reading, repaying or
 voting.
+
+### The rails, and what they can actually do
+
+A member pays over USSD: **PalmPesa** pushes a prompt to their handset, they
+approve it, and a signed callback tells the circle. It is implemented against
+the contract KobeOS already runs in production, so both systems can share one
+PalmPesa account.
+
+**KobePay is not a rail.** It is where the net lands. There is no API to call
+and no payout endpoint — the operator keeps its processing share and remits
+the rest on its own settlement cycle. So the second half is *reconciled*, not
+requested: statement lines are imported and matched against what the circle
+believes it collected, and only the exceptions reach a person.
+
+That gap matters. Between confirming a collection and receiving it, the books
+say the circle holds money it has not been given. `totals.inTransit` is exactly
+that figure, and a circle that never checks the second half cannot discover a
+settlement that was short, late, or never came.
+
+PalmPesa also cannot reverse a collection — initiate and order-status are its
+whole surface. The application fee is still refundable, so a refund is a payout
+somebody makes and records, and the system says so plainly rather than failing
+at the moment of need.
 
 ### A surplus is not money in the account
 

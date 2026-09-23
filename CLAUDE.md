@@ -9,7 +9,7 @@ against their own worked examples.
 
 ```bash
 npm install              # workspaces: packages/core, apps/api, apps/admin, apps/mobile
-npm test                 # 411 tests — core (290) then api (121)
+npm test                 # 457 tests — core (309) then api (148)
 npm run seed             # a circle with eight months of history; asserts the books balance
 npm run dev:api          # API + admin panel on http://localhost:4000
 
@@ -74,6 +74,20 @@ limit. Nobody may authorise past missing cover or missing cash — those are not
 policies to relax, they are the facts the policy protects. Never add a gate to
 `exceptionableGates` without saying why in `FINANCIAL-MODEL.md`.
 
+**PalmPesa collects; KobePay receives.** PalmPesa is the only rail that talks
+to a handset, implemented against the contract KobeOS runs
+(`server/src/creators/palmpesa.service.ts` in that repo). KobePay is a
+settlement *account*, not a service — there is no payout endpoint anywhere, so
+never add a "KobePay provider". Settlement is imported and matched
+(`settlement.ts`). PalmPesa cannot refund; a refund is a manual payout recorded
+against the intent.
+
+**Callbacks are verified over the raw bytes.** `x-webhook-signature` is
+`HMAC-SHA256(`${WEBHOOK_SECRET}:${provider}`, rawBody)`, matching KobeOS so one
+sender reaches both. Never re-serialise the parsed body to check a signature,
+never add a default secret, and never compare digests with `!==`. A `PENDING`
+callback is not a confirmation.
+
 **A sponsor cannot be released except by paying their cover.** Cover comes back
 one way as a matter of course: the borrower repays. The only other exit is
 `buyoutQuote` — pay what you are still carrying, and the cash stands in place
@@ -104,4 +118,6 @@ risky is not a guarantee.
 - Application fee and subscription: `packages/core/src/payments.ts`
 - Cash flow and member statements: `packages/core/src/statements.ts`
 - The approval gate and exceptions: `packages/core/src/approval.ts`
+- Settlement matching: `packages/core/src/settlement.ts`
+- Payment rails: `apps/api/src/providers.ts`
 - Storage ↔ engine bridge: `apps/api/src/circle.ts`

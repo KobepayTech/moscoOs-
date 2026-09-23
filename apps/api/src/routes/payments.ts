@@ -23,6 +23,7 @@ import {
   describeFeeSplit,
   formatMoney,
   monthKey,
+  reconcileSettlement,
   splitPlatformFee,
   subscriptionStatus,
   today,
@@ -682,6 +683,155 @@ export function registerPaymentRoutes(router: Router, db: Db): void {
    * Anything listed here is a discrepancy someone must resolve: money the
    * rail confirmed that never posted, or an intent stuck in flight.
    */
+  // -------------------------------------------------------------------------
+  // Settlement — proving the money actually arrived
+  // -------------------------------------------------------------------------
+
+  /**
+   * Load credits from the settlement account's statement.
+   *
+   * Imported rather than fetched: KobePay is an account, not a service the
+   * circle can call, so the lines arrive as an export somebody uploads. The
+   * import is idempotent on the statement's own line id, so loading the same
+   * statement twice does not double the circle's receipts — which is the
+   * mistake anybody doing this by hand makes eventually.
+   */
+  router.post(
+    '/settlements/import',
+    ({ body, principal }) => {
+      const account = str(body, 'account', { optional: true, max: 40 }) || 'kobepay';
+      const rows = Array.isArray((body as Record<string, unknown>)?.lines)
+        ? ((body as Record<string, unknown>).lines as Record<string, unknown>[])
+        : null;
+
+      if (!rows || rows.length === 0) {
+        throw ApiError.badRequest('Send the statement lines as `lines: [...]`');
+      }
+      if (rows.length > 2_000) {
+        throw ApiError.badRequest('Import at most 2,000 lines at a time');
+      }
+
+      return transact(db, () => {
+        let imported = 0;
+        let alreadyKnown = 0;
+
+        for (const [index, row] of rows.entries()) {
+          const externalId = str(row, 'id', { max: 120 });
+          const amount = moneyField(row, 'amount');
+          const settledOn = dateField(row, 'settledOn', today());
+
+          if (amount <= 0) {
+            throw ApiError.unprocessable(`Line ${index + 1} (${externalId}) credits ${amount}; a credit must be positive`);
+          }
+
+          const result = db
+            .prepare(
+              `INSERT INTO settlement_lines
+                 (id, account, amount, settled_on, reference, rail_receipt, narrative,
+                  external_id, imported_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT (account, external_id) DO NOTHING`,
+            )
+            .run(
+              newId('stl'),
+              account,
+              amount,
+              settledOn,
+              str(row, 'reference', { optional: true, max: 120 }) || null,
+              str(row, 'railReceipt', { optional: true, max: 120 }) || null,
+              str(row, 'narrative', { optional: true, max: 300 }) || null,
+              externalId,
+              principal!.memberId,
+              nowISO(),
+            );
+
+          if (result.changes > 0) imported += 1;
+          else alreadyKnown += 1;
+        }
+
+        audit(db, {
+          actorId: principal!.memberId,
+          action: 'settlement_imported',
+          entityType: 'settlement',
+          entityId: account,
+          detail: { imported, alreadyKnown, lines: rows.length },
+        });
+
+        return {
+          account,
+          imported,
+          alreadyKnown,
+          note:
+            alreadyKnown > 0
+              ? `${alreadyKnown} line(s) were already on the record and were not counted twice.`
+              : undefined,
+        };
+      });
+    },
+    { roles: CASHIER_ROLES },
+  );
+
+  /**
+   * What agrees, and what does not.
+   *
+   * Open to every member: the gap between "the books say we have it" and "the
+   * account received it" is exactly the sort of thing a circle should not
+   * have to take one person's word for.
+   */
+  router.get('/settlements/reconciliation', ({ query }) => {
+    const config = loadConfig(db);
+    const account = query.get('account') ?? config.platform.settlementProvider;
+    const asOf = query.get('asOf') ?? today();
+
+    // Only what the circle keeps: the operator's subscription revenue settles
+    // to the operator, and is none of the circle's business.
+    const collected = (
+      db
+        .prepare(
+          `SELECT * FROM payment_intents
+            WHERE status = 'confirmed' AND beneficiary = 'circle' AND confirmed_at IS NOT NULL
+            ORDER BY confirmed_at`,
+        )
+        .all() as unknown as PaymentRow[]
+    ).map((payment) => ({
+      intentId: payment.id,
+      reference: payment.id,
+      railReceipt: payment.proof_reference ?? undefined,
+      expectedNet: payment.net_amount,
+      confirmedOn: (payment.confirmed_at ?? '').slice(0, 10),
+      purpose: payment.purpose,
+      memberId: payment.member_id,
+    }));
+
+    const lines = (
+      db
+        .prepare('SELECT * FROM settlement_lines WHERE account = ? ORDER BY settled_on, rowid')
+        .all(account) as unknown as {
+        id: string;
+        amount: number;
+        settled_on: string;
+        reference: string | null;
+        rail_receipt: string | null;
+        narrative: string | null;
+        external_id: string;
+      }[]
+    ).map((row) => ({
+      id: row.id,
+      amount: row.amount,
+      settledOn: row.settled_on,
+      reference: row.reference ?? undefined,
+      railReceipt: row.rail_receipt ?? undefined,
+      narrative: row.narrative ?? undefined,
+    }));
+
+    const report = reconcileSettlement(collected, lines, {
+      asOf,
+      formatAmount: (amount) => formatMoney(amount, config.currency),
+    });
+
+    return { account, ...report };
+  });
+
   router.get('/payments/reconciliation', ({ query }) => {
     const from = query.get('from') ?? '1970-01-01';
     const to = query.get('to') ?? today();

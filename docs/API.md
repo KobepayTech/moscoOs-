@@ -253,6 +253,24 @@ Every entry, the balance sheet and the trial balance. `?asOf=` `?memberId=`
 ### `GET /reports/income` *(all)* — `?from=` `?to=`
 ### `GET /reports/position` *(all)* — includes `booksBalance`
 
+### `POST /settlements/import` *(cashier)*
+`{ "account": "kobepay", "lines": [{ "id": "...", "amount": 47500, "settledOn": "...",
+"reference": "...", "railReceipt": "...", "narrative": "..." }] }`
+
+Credits on the circle's settlement account, read off a statement. Imported
+rather than fetched — KobePay is an account, not a service the circle can call.
+Idempotent on each line's own id, so loading a statement twice does not double
+the circle's receipts.
+
+### `GET /settlements/reconciliation` *(all)* — `?account=` `?asOf=`
+What agrees between the books and the account, and what does not. Matches on
+the reference sent to the rail, then the rail receipt, then the statement
+narrative — the basis travels with each match, because a narrative match is a
+guess. Exceptions are `awaiting_settlement` (in transit, not a problem),
+`overdue_settlement`, `short_settlement`, `over_settlement` and
+`unexpected_credit`. `totals.inTransit` is money the books count as the
+circle's that has not actually arrived.
+
 ### `GET /reports/cash-flow` *(all)* — `?from=` `?to=`
 Where the cash went, in three sections: `lending` (out to borrowers, principal
 back), `earnings` (interest and fees received, less running costs and the

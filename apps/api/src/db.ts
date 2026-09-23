@@ -337,6 +337,30 @@ CREATE TABLE IF NOT EXISTS platform_subscriptions (
   UNIQUE (member_id, period)
 );
 
+-- Credits on the circle's settlement account, as read off a statement.
+--
+-- There is no API to ask KobePay what it has paid out: settlement lines are
+-- imported, not fetched. Kept raw and unjudged — matching them against what
+-- the circle believes it collected is a separate step, and a line that
+-- matches nothing must still be on the record.
+CREATE TABLE IF NOT EXISTS settlement_lines (
+  id            TEXT PRIMARY KEY,
+  account       TEXT    NOT NULL,           -- which settlement account, e.g. kobepay
+  amount        INTEGER NOT NULL CHECK (amount > 0),
+  settled_on    TEXT    NOT NULL,
+  reference     TEXT,
+  rail_receipt  TEXT,
+  narrative     TEXT,
+  -- What the statement called this line. Imports are idempotent on it, so the
+  -- same statement loaded twice does not double the circle's receipts.
+  external_id   TEXT    NOT NULL,
+  imported_by   TEXT REFERENCES members(id),
+  created_at    TEXT    NOT NULL,
+  UNIQUE (account, external_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_settlement_date ON settlement_lines(settled_on);
+
 -- Every automated approval decision, with the checks that produced it.
 --
 -- Written whether the loan was approved or not: a member refused by a rule is
