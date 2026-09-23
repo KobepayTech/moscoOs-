@@ -32,7 +32,7 @@ import {
 import { CASHIER_ROLES } from '../auth.js';
 import { audit, buildBook, loadConfig, loadLoan, notify, post, writeSnapshot } from '../circle.js';
 import { type Db, newId, nowISO, transact } from '../db.js';
-import { ApiError, type Router, dateField, enumField, moneyField, str } from '../http.js';
+import { type Ctx, ApiError, type Router, dateField, enumField, moneyField, str } from '../http.js';
 import { listProviders, providerFor, ProviderNotConfiguredError } from '../providers.js';
 import { findMember } from './members.js';
 
@@ -311,7 +311,7 @@ export function registerPaymentRoutes(router: Router, db: Db): void {
    * a member who taps twice gets the same intent back rather than a second
    * charge.
    */
-  router.post('/loans/:id/application-fee', ({ params, body, principal }) => {
+  router.post('/loans/:id/application-fee', async ({ params, body, principal }) => {
     const config = loadConfig(db);
     const loan = loadLoan(db, params.id);
 
@@ -336,7 +336,7 @@ export function registerPaymentRoutes(router: Router, db: Db): void {
     const split = splitPlatformFee(config.applicationFee.amount, config.applicationFee.processingFeeRate);
     const member = findMember(db, principal!.memberId);
 
-    return transact(db, () => {
+    const created = transact(db, () => {
       const id = newId('pay');
       // One live fee per loan, whatever the client does.
       const idempotencyKey = `application_fee:${loan.id}`;
@@ -363,23 +363,6 @@ export function registerPaymentRoutes(router: Router, db: Db): void {
         .prepare('SELECT * FROM payment_intents WHERE idempotency_key = ?')
         .get(idempotencyKey) as unknown as PaymentRow;
 
-      let instruction: string | undefined;
-
-      if (provider.supportsPush && provider.configured) {
-        try {
-          // Not awaited inside the transaction in production code — kept
-          // synchronous here because the adapters are not yet live.
-          instruction = 'A prompt has been sent to your handset.';
-        } catch (error) {
-          throw ApiError.unprocessable((error as Error).message);
-        }
-      } else if (provider.supportsPush && !provider.configured) {
-        instruction =
-          `The ${providerName} rail is not connected yet. Pay the cashier and ask them to record it.`;
-      } else {
-        instruction = 'Hand the money to the cashier, who will confirm it against a receipt.';
-      }
-
       audit(db, {
         actorId: principal!.memberId,
         action: 'application_fee_started',
@@ -388,14 +371,95 @@ export function registerPaymentRoutes(router: Router, db: Db): void {
         detail: { paymentId: intent.id, gross: split.gross, net: split.net },
       });
 
-      return {
-        payment: intent,
-        split,
-        instruction,
-        explanation: describeFeeSplit(split, (amount) => formatMoney(amount, config.currency)),
-      };
+      return intent;
     });
+
+    /*
+     * The push happens after the transaction, never inside it.
+     *
+     * Initiating is a network call to the rail, and holding a SQLite write
+     * transaction open across it would block every other write for as long as
+     * PalmPesa takes to answer. The intent is already durable by this point,
+     * so a failure here leaves a pending intent somebody can retry or pay in
+     * cash — which is the right outcome, rather than losing the record of the
+     * attempt.
+     */
+    const push = await pushToRail(db, provider, created, {
+      payerName: member.full_name,
+      payerPhone: member.phone,
+      payerEmail: member.email ?? undefined,
+      narrative: `Loan application fee — ${config.circleName}`,
+      currency: config.currency,
+    });
+
+    return {
+      payment: findPayment(db, created.id),
+      split,
+      instruction: push.instruction,
+      explanation: describeFeeSplit(split, (amount) => formatMoney(amount, config.currency)),
+    };
   });
+
+  /**
+   * Send the prompt, and record what the rail said.
+   *
+   * Every failure here is recoverable by hand, so none of them is fatal: a
+   * circle must never be unable to take money because an API is down. What
+   * the member is told changes, not whether the intent survives.
+   */
+  async function pushToRail(
+    database: Db,
+    provider: ReturnType<typeof providerFor>,
+    intent: PaymentRow,
+    details: {
+      payerName: string;
+      payerPhone: string;
+      payerEmail?: string;
+      narrative: string;
+      currency: string;
+    },
+  ): Promise<{ instruction: string }> {
+    if (!provider.supportsPush) {
+      return { instruction: 'Hand the money to the cashier, who will confirm it against a receipt.' };
+    }
+    if (!provider.configured) {
+      return {
+        instruction:
+          `The ${provider.name} rail is not connected yet. Pay the cashier and ask them to record it.`,
+      };
+    }
+
+    try {
+      const result = await provider.initiate({
+        intentId: intent.id,
+        // The intent id is what goes out as the rail's transaction_id and
+        // comes back as the callback's reference.
+        reference: intent.id,
+        grossAmount: intent.gross_amount,
+        currency: details.currency,
+        payerPhone: details.payerPhone,
+        payerName: details.payerName,
+        payerEmail: details.payerEmail,
+        narrative: details.narrative,
+      });
+
+      database
+        .prepare("UPDATE payment_intents SET status = 'initiated', provider_ref = ?, initiated_at = ? WHERE id = ?")
+        .run(result.providerRef, nowISO(), intent.id);
+
+      return {
+        instruction: result.instruction ?? 'A prompt has been sent to your handset.',
+      };
+    } catch (error) {
+      const reason = (error as Error).message;
+      database.prepare('UPDATE payment_intents SET failure_reason = ? WHERE id = ?').run(reason, intent.id);
+
+      return {
+        instruction:
+          `The prompt could not be sent (${reason}). Pay the cashier instead and ask them to record it.`,
+      };
+    }
+  }
 
   /**
    * Confirm a payment by hand.
@@ -452,52 +516,88 @@ export function registerPaymentRoutes(router: Router, db: Db): void {
    * the signature check is not optional. An unverified callback would let
    * anyone who can reach this endpoint credit any account.
    */
-  router.post(
-    '/payments/callback/:provider',
-    async ({ params, body, req }) => {
-      const provider = providerFor(params.provider);
-      const signature =
-        (req.headers['x-signature'] as string | undefined) ??
-        (req.headers['x-webhook-signature'] as string | undefined);
+  const handleCallback = async ({ params, body, rawBody, req }: Ctx) => {
+    const provider = providerFor(params.provider);
+    const signature =
+      (req.headers['x-webhook-signature'] as string | undefined) ??
+      (req.headers['x-signature'] as string | undefined);
 
-      const raw = JSON.stringify(body ?? {});
+    // The bytes as they arrived. Re-serialising the parsed body can reorder
+    // keys and produce a different digest from the one the sender signed.
+    if (!provider.verifyCallback(rawBody ?? '', signature)) {
+      throw ApiError.unauthorized('Callback signature did not verify');
+    }
 
-      if (!provider.verifyCallback(raw, signature)) {
-        throw ApiError.unauthorized('Callback signature did not verify');
-      }
+    let parsed;
+    try {
+      parsed = provider.parseCallback(body);
+    } catch (error) {
+      if (error instanceof ProviderNotConfiguredError) throw ApiError.unprocessable(error.message);
+      throw ApiError.badRequest((error as Error).message);
+    }
 
-      let parsed;
-      try {
-        parsed = provider.parseCallback(body);
-      } catch (error) {
-        if (error instanceof ProviderNotConfiguredError) throw ApiError.unprocessable(error.message);
-        throw error;
-      }
-
-      const payment = db
+    /*
+     * The reference is ours, the order id is theirs.
+     *
+     * `transaction_id` goes out as the intent id and comes back as the
+     * callback's `reference`, so that is the first thing to match on. The
+     * rail's own order id is the fallback, for callbacks that carry only it.
+     */
+    const payment = (db
+      .prepare('SELECT * FROM payment_intents WHERE id = ? AND provider = ?')
+      .get(parsed.providerRef, params.provider) ??
+      db
         .prepare('SELECT * FROM payment_intents WHERE provider = ? AND provider_ref = ?')
-        .get(params.provider, parsed.providerRef) as unknown as PaymentRow | undefined;
+        .get(params.provider, parsed.providerRef)) as unknown as PaymentRow | undefined;
 
-      if (!payment) throw ApiError.notFound('No payment matches that reference');
+    // One PalmPesa account serves several products, so callbacks for other
+    // systems reach this endpoint too. Acknowledge rather than 404: a rail
+    // that gets an error will retry something that was never ours.
+    if (!payment) return { received: true, ignored: 'not a payment of this circle' };
 
-      // Repeat deliveries are expected and must be harmless.
-      if (payment.status === 'confirmed') return { received: true, alreadyConfirmed: true };
+    // Repeat deliveries are expected and must be harmless.
+    if (payment.status === 'confirmed') return { received: true, alreadyConfirmed: true };
 
-      return transact(db, () => {
-        if (parsed.status === 'failed') {
-          db.prepare("UPDATE payment_intents SET status = 'failed', failure_reason = ? WHERE id = ?").run(
-            parsed.failureReason ?? 'declined',
-            payment.id,
-          );
-          return { received: true, status: 'failed' };
-        }
+    /*
+     * PENDING is not a confirmation.
+     *
+     * The member has been sent the prompt and has not answered it. Treating
+     * that as payment would credit a fee nobody has paid — and PalmPesa does
+     * send interim callbacks.
+     */
+    if (parsed.status === 'pending') {
+      return { received: true, status: 'pending' };
+    }
 
-        const posted = postConfirmation(db, payment, today());
-        return { received: true, status: 'confirmed', posted };
-      });
-    },
-    { public: true },
-  );
+    return transact(db, () => {
+      if (parsed.status === 'failed') {
+        db.prepare("UPDATE payment_intents SET status = 'failed', failure_reason = ? WHERE id = ?").run(
+          parsed.failureReason ?? 'declined',
+          payment.id,
+        );
+        return { received: true, status: 'failed' };
+      }
+
+      // Record the rail's own receipt: it is what a member quotes in a
+      // dispute, and what a settlement line is matched against later.
+      if (parsed.railReceipt) {
+        db.prepare('UPDATE payment_intents SET proof_reference = ? WHERE id = ?').run(
+          parsed.railReceipt,
+          payment.id,
+        );
+      }
+
+      const posted = postConfirmation(db, payment, today());
+      return { received: true, status: 'confirmed', posted };
+    });
+  };
+
+  // The path KobeOS's rails are configured to call, so one PalmPesa account
+  // can serve both systems without per-product callback URLs.
+  router.post('/webhooks/:provider', handleCallback, { public: true });
+
+  // The original path, kept so anything already pointed at it keeps working.
+  router.post('/payments/callback/:provider', handleCallback, { public: true });
 
   // -------------------------------------------------------------------------
   // The platform subscription

@@ -388,24 +388,33 @@ describe('the payment rails', () => {
     const token = await signIn(phoneOf(0));
     const { body } = await call('/payments/providers', { token });
 
-    const providers = body.providers as { name: string; configured: boolean; missing: string[] }[];
+    const providers = body.providers as {
+      name: string;
+      configured: boolean;
+      supportsRefund: boolean;
+      missing: string[];
+    }[];
     const byName = new Map(providers.map((provider) => [provider.name, provider]));
 
     // Cash always works; a circle must be able to take money when an API is down.
     assert.equal(byName.get('manual')!.configured, true);
 
-    // The two rails await their specifications, and say what is missing
-    // rather than pretending to work.
-    for (const name of ['palmpesa', 'kobepay']) {
-      assert.equal(byName.get(name)!.configured, false, `${name} claims to be configured`);
-      assert.ok(byName.get(name)!.missing.length > 0, `${name} does not say what it needs`);
-    }
+    // PalmPesa is implemented but needs credentials, and says which.
+    const palmpesa = byName.get('palmpesa')!;
+    assert.equal(palmpesa.configured, false, 'no token is set in the test environment');
+    assert.ok(palmpesa.missing.some((item) => item.includes('PALMPESA_API_TOKEN')));
+
+    // It cannot reverse a collection, and says so rather than failing later.
+    assert.equal(palmpesa.supportsRefund, false);
+
+    // KobePay is where the net settles, not something the circle calls.
+    assert.equal(byName.has('kobepay'), false, 'KobePay is a settlement account, not a rail');
   });
 
   it('rejects an unsigned callback', async () => {
-    const { status } = await call('/payments/callback/kobepay', {
+    const { status } = await call('/webhooks/palmpesa', {
       method: 'POST',
-      body: { reference: 'anything', status: 'success', amount: 50_000 },
+      body: { reference: 'anything', payment_status: 'COMPLETED' },
     });
 
     // Without a verified signature anyone who can reach this endpoint could
@@ -414,12 +423,21 @@ describe('the payment rails', () => {
   });
 
   it('rejects a callback for an unknown provider', async () => {
-    const { status } = await call('/payments/callback/not-a-rail', {
+    const { status } = await call('/webhooks/not-a-rail', {
       method: 'POST',
-      body: { reference: 'x', status: 'success' },
+      body: { reference: 'x', payment_status: 'COMPLETED' },
     });
 
     assert.ok(status >= 400);
+  });
+
+  it('still answers on the original callback path', async () => {
+    const { status } = await call('/payments/callback/palmpesa', {
+      method: 'POST',
+      body: { reference: 'anything', payment_status: 'COMPLETED' },
+    });
+
+    assert.equal(status, 401, 'reachable, and still refuses an unsigned body');
   });
 });
 

@@ -22,6 +22,15 @@ export interface Ctx {
   params: Record<string, string>;
   query: URLSearchParams;
   body: unknown;
+  /**
+   * The body exactly as it arrived, before parsing.
+   *
+   * Needed only by signed webhooks. A signature is computed over bytes, and
+   * re-serialising the parsed body can reorder keys or change spacing — the
+   * digest then differs from the one the sender computed, and a genuine
+   * callback is refused. Undefined when there was no body.
+   */
+  rawBody: string | undefined;
   /** Null on public routes. */
   principal: Principal | null;
 }
@@ -213,13 +222,14 @@ export class Router {
         }
       }
 
-      const body = await readJsonBody(req);
+      const { body, raw } = await readJsonBody(req);
       const result = await found.route.handler({
         req,
         res,
         params: found.params,
         query: url.searchParams,
         body,
+        rawBody: raw,
         principal,
       });
 
@@ -280,8 +290,10 @@ function replacer(_key: string, value: unknown): unknown {
 
 const MAX_BODY_BYTES = 1_000_000;
 
-async function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  if (req.method === 'GET' || req.method === 'DELETE') return undefined;
+async function readJsonBody(
+  req: IncomingMessage,
+): Promise<{ body: unknown; raw: string | undefined }> {
+  if (req.method === 'GET' || req.method === 'DELETE') return { body: undefined, raw: undefined };
 
   const chunks: Buffer[] = [];
   let size = 0;
@@ -292,13 +304,15 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
     chunks.push(chunk as Buffer);
   }
 
-  if (chunks.length === 0) return undefined;
+  if (chunks.length === 0) return { body: undefined, raw: undefined };
 
-  const raw = Buffer.concat(chunks).toString('utf8').trim();
-  if (!raw) return undefined;
+  // Kept verbatim for signature checks; only the parse sees the trimmed form.
+  const raw = Buffer.concat(chunks).toString('utf8');
+  const trimmed = raw.trim();
+  if (!trimmed) return { body: undefined, raw };
 
   try {
-    return JSON.parse(raw);
+    return { body: JSON.parse(trimmed), raw };
   } catch {
     throw ApiError.badRequest('Request body must be valid JSON');
   }

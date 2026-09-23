@@ -178,7 +178,12 @@ export interface ApplicationFeeConfig {
    * member paid, with the circle absorbing the rail's charge.
    */
   refundMode: 'net' | 'gross';
-  /** Rail used to collect it. */
+  /**
+   * Rail that pushes the USSD prompt and takes the money.
+   *
+   * PalmPesa. Not KobePay — KobePay is where the net settles, which is a
+   * different thing and not something the circle calls.
+   */
   provider: string;
   /** Days an unpaid application waits before it lapses. */
   unpaidExpiryDays: number;
@@ -193,7 +198,15 @@ export interface PlatformConfig {
   subscriptionGraceDays: number;
   /** Rail used to collect the subscription. */
   subscriptionProvider: string;
-  /** The circle's account with the remitting rail, where net fees land. */
+  /**
+   * Where the net settles, which is an account rather than an API.
+   *
+   * The operator collects over PalmPesa, keeps its processing share, and the
+   * remainder reaches the circle's KobePay account on the rail's own
+   * settlement cycle. Nothing here initiates that — it is reconciled when it
+   * arrives (`settlement.ts`), because a transfer the circle cannot make is
+   * not a transfer the circle should pretend to have made.
+   */
   settlementProvider: string;
 }
 
@@ -308,7 +321,8 @@ export function defaultCircleConfig(): CircleConfig {
       processingFeeRate: 0.05,
       refundable: true,
       refundMode: 'net',
-      provider: 'kobepay',
+      // PalmPesa collects; the net settles into the KobePay account below.
+      provider: 'palmpesa',
       unpaidExpiryDays: 7,
     },
 
